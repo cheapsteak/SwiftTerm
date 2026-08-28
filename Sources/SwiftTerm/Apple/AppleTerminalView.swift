@@ -1429,7 +1429,13 @@ extension TerminalView {
     /// The closure must not call another API that synchronously acquires the
     /// terminal lock. Helpers that assume the lock is held use the `Locked`
     /// suffix and assert that contract in DEBUG builds.
-    func withTerminal<T> (_ body: (Terminal) throws -> T, caller: StaticString = #function) rethrows -> T
+    ///
+    /// This is the supported route for embedders that need `Terminal`-level
+    /// state or behavior from a view: copy any values you need out of the
+    /// closure and return them, rather than storing the `Terminal` reference,
+    /// and do not call back into `TerminalView` APIs from inside the closure —
+    /// they may acquire the same lock and deadlock.
+    public func withTerminal<T> (_ body: (Terminal) throws -> T, caller: StaticString = #function) rethrows -> T
     {
         if ProfilingStats.enabled && Thread.isMainThread {
             ProfilingLockCallers.shared.record(caller)

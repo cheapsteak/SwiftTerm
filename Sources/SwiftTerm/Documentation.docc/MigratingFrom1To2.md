@@ -90,10 +90,14 @@ Use terminal snapshots and command entry points instead:
   ``TerminalView/feed(text:)`` for parser-safe input
 - ``TerminalView/softReset()`` and ``TerminalView/resetToInitialState()``
 
-If you need terminal-level behavior inside UI callbacks, use the ``Terminal``
-instance passed to ``TerminalViewDelegate`` methods such as
-the `source` argument. For direct terminal ownership APIs, use
-``HeadlessTerminal`` where ``HeadlessTerminal/terminal`` remains public.
+If you need terminal-level behavior from a view — including inside
+``TerminalViewDelegate`` callbacks, whose `source` argument is the
+``TerminalView``, not the ``Terminal`` — use
+``TerminalView/withTerminal(_:caller:)``, which runs a closure with the
+``Terminal`` while holding the terminal lock; copy the values you need out of
+the closure rather than storing the ``Terminal`` reference. For direct
+terminal ownership APIs, use ``HeadlessTerminal`` where
+``HeadlessTerminal/terminal`` remains public.
 
 Example migration:
 
