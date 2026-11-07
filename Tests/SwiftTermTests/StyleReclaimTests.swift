@@ -442,6 +442,68 @@ struct StyleReclaimTests {
         #expect(copy.attribute(for: third) == attribute(3))
     }
 
+    @Test func eachReclaimThatReleasesAlmostNothingDoublesTheWait() throws {
+        let arena = CellArena(styleCapacity: 64)
+        var live = StyleIdentifierSet()
+        for index in 1...64 {
+            let identifier = try #require(arena.intern(attribute: attribute(index)))
+            live.insert(identifier)
+        }
+        // With 64 identifiers the first wait is 4 new attributes. Each
+        // reclaim in a row that frees nothing doubles the next wait, up to 16
+        // times the first.
+        var waits: [Int] = []
+        for _ in 0..<6 {
+            #expect(arena.reclaimAttributes(keeping: live) == 0)
+            waits.append(arena.attributeReclaimInterval)
+        }
+        #expect(waits == [4, 8, 16, 32, 64, 64])
+
+        // A reclaim that frees enough starts again at the first wait.
+        #expect(arena.reclaimAttributes(keeping: StyleIdentifierSet()) == 64)
+        #expect(arena.attributeReclaimInterval == 4)
+    }
+
+    /// DECCRA copies styled rows for a few bytes, so a loop can copy rows,
+    /// scroll the originals into the scrollback and discard them with ED 3
+    /// while the copies keep every identifier in use. Each reclaim that loop
+    /// earns frees almost nothing, so each doubles the wait for the next.
+    @Test func reclaimsThatFreeAlmostNothingWaitLongerEachTime() {
+        let cols = 300
+        let rows = 220
+        let (terminal, _) = TerminalTestHarness.makeTerminal(cols: cols, rows: rows,
+                                                             scrollback: 100)
+        // The alternate screen keeps every identifier but the last in use.
+        terminal.feed(text: "\u{1b}[?47h\u{1b}[H")
+        terminal.feed(byteArray: colouredCells(0..<styleTableCapacity - 1))
+        terminal.feed(text: "\u{1b}[0m\u{1b}[?47l\u{1b}[H")
+        // The top rows of the normal screen hold 4,200 of those styles, more
+        // than the first wait of 4,095.
+        let copiedRows = 14
+        terminal.feed(byteArray: colouredCells(0..<copiedRows * cols))
+        terminal.feed(text: "\u{1b}[0m")
+
+        // Each cycle copies the rows below themselves, scrolls the originals
+        // into the scrollback, discards them with ED 3 and selects one new
+        // colour. The first new colour takes the last identifier, and the
+        // second finds the table full and reclaims it.
+        var bytes: [UInt8] = []
+        for cycle in 0..<40 {
+            bytes.append(contentsOf:
+                "\u{1b}[1;1;\(copiedRows);\(cols);1;\(copiedRows + 1);1;1$v".utf8)
+            bytes.append(contentsOf: "\u{1b}[\(rows)H".utf8)
+            bytes.append(contentsOf: [UInt8](repeating: UInt8(ascii: "\n"), count: copiedRows))
+            bytes.append(contentsOf: "\u{1b}[3J".utf8)
+            appendForeground(styleTableCapacity - 1 + cycle, to: &bytes)
+            bytes.append(contentsOf: "\u{1b}[0m".utf8)
+        }
+        terminal.feed(byteArray: bytes)
+        // The next ED 3 credits the 4,200 copied styles, which earns a second
+        // reclaim. It also frees one identifier, so the wait doubles to
+        // 8,190, which those styles, credited once per wait, cannot reach.
+        #expect(terminal.buffer.cellArena.attributeEpoch == 2)
+    }
+
     @Test func aReclaimThatReleasesNothingWaitsBeforeTheNextScan() throws {
         let arena = CellArena(styleCapacity: 64)
         var live = StyleIdentifierSet()

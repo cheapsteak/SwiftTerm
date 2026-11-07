@@ -347,6 +347,9 @@ final class CellArena {
     /// that each is credited at most once per wait. It exists only while
     /// something has been credited.
     private var creditedAttributeIdentifiers: StyleIdentifierSet?
+    /// Reclaims in a row that released almost nothing, counted up to the
+    /// point where the wait stops growing.
+    private var nearlyFruitlessReclaims = 0
 
     private let graphemeBlocks: UnsafeMutablePointer<UnsafeMutablePointer<[UInt32]?>?>
     private let graphemeCapacity: Int
@@ -567,13 +570,25 @@ final class CellArena {
         return identifier
     }
 
+    /// The wait after a reclaim that released enough identifiers.
+    private var baseReclaimInterval: Int { max(1, attributeCapacity / 16) }
+
     /// New attributes a full table must see after a reclaim before the next
     /// one may run. A terminal whose cells still hold nearly every identifier
     /// then pays for one scan per this many new styles rather than one per
     /// style, and those styles fall back to the default attribute meanwhile.
     /// Discarded lines count toward the wait too, through
     /// ``creditReclaimWait(discarding:)``.
-    private var attributeReclaimInterval: Int { max(1, attributeCapacity / 16) }
+    ///
+    /// Credits can still come cheaply, since DECCRA copies styled cells for a
+    /// few bytes and the copies keep the identifiers in use when the
+    /// originals are discarded. So each reclaim in a row after the first that
+    /// releases almost nothing doubles the wait, up to 16 times the base,
+    /// which is about the size of the table. A reclaim that releases enough
+    /// starts again at the base.
+    var attributeReclaimInterval: Int {
+        baseReclaimInterval << max(nearlyFruitlessReclaims - 1, 0)
+    }
 
     /// True while a full table waits for ``attributeReclaimInterval`` new
     /// attributes before it reclaims again. The table-full test comes first,
@@ -647,6 +662,15 @@ final class CellArena {
                attributeIdentifiers.values[index] == identifier {
                 attributeIdentifiers.remove(at: index)
             }
+        }
+        // A reclaim that releases at least 1/16 of the base wait, 255
+        // identifiers in a full-size table, serves that many new styles
+        // before the next one can run, which pays for its scan as 255 misses
+        // would. One that releases fewer lengthens the next wait.
+        if released.count < max(1, baseReclaimInterval / 16) {
+            nearlyFruitlessReclaims = min(nearlyFruitlessReclaims + 1, 5)
+        } else {
+            nearlyFruitlessReclaims = 0
         }
         // Descending order puts the lowest identifier last, where
         // `popLast()` takes it first.
