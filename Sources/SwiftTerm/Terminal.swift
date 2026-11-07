@@ -997,9 +997,13 @@ open class Terminal {
         normalBuffer.terminal = self
         altBuffer.terminal = self
 
-        setupTabStops()
-
         setup()
+
+        // The buffers above are built at the default width, and `setup()`
+        // grows them to `options.cols`. `Buffer.resize` gives the columns it
+        // adds no tab stops, so the default stops are laid once the grid has
+        // its real width.
+        setupTabStops()
     }
 
     deinit {
