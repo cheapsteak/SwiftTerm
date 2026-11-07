@@ -201,6 +201,23 @@ struct StyleReclaimTests {
         #expect(terminal.getCharData(col: 0, row: 0)?.attribute.fg == colour(styleTableCapacity))
     }
 
+    /// A host's own call to `resetNormalBuffer()` replaces the normal buffer
+    /// but keeps the old one on screen until the next screen switch, so a
+    /// reclaim keeps what the old one holds.
+    @Test func aReclaimKeepsTheColoursOfAReplacedBufferStillOnScreen() {
+        let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 80, rows: 24, scrollback: 10)
+        // These cells take the lowest identifiers, which a reclaim reuses first.
+        let onScreen = 40
+        terminal.feed(byteArray: colouredCells(0..<onScreen))
+        terminal.resetNormalBuffer()
+
+        // The pen fills the table. The first of the last 40 reclaims, and all
+        // 40 take the lowest identifiers that reclaim released.
+        terminal.feed(byteArray: penChanges(onScreen..<styleTableCapacity + onScreen))
+        let kept = (0..<onScreen).map { terminal.getCharData(col: $0, row: 0)?.attribute.fg }
+        #expect(kept == (0..<onScreen).map { Optional(colour($0)) })
+    }
+
     /// Lines discarded from the scrollback leave the buffer's line slots, so
     /// the scan no longer counts them as holders.
     @Test(arguments: [Discard.eraseSavedLines, .clearScrollback])

@@ -759,9 +759,9 @@ open class Terminal {
     /// for it.
     ///
     /// The holders are the cells of both screens, scrollback included, the
-    /// current pen and the cached erase cells. Saved cursors keep their
-    /// attribute by value and intern it again on restore, so they hold no
-    /// identifier.
+    /// displayed buffer when it is neither, the current pen and the cached
+    /// erase cells. Saved cursors keep their attribute by value and intern it
+    /// again on restore, so they hold no identifier.
     ///
     /// Reclaim cannot help when the cells still use every identifier, as when
     /// scrollback alone holds 65,535 distinct styles. Nothing is released
@@ -776,6 +776,13 @@ open class Terminal {
         live.insert(currentEraseSpaceCell.styleID)
         normalBuffer.insertStyleIdentifiers(into: &live)
         altBuffer.insertStyleIdentifiers(into: &live)
+        // `resetNormalBuffer()` replaces the normal buffer but leaves the
+        // displayed one alone. A full reset switches to the new buffer at
+        // once, but a host that calls it directly keeps showing, and
+        // printing to, the old one until the next screen switch.
+        if buffer !== normalBuffer && buffer !== altBuffer {
+            buffer.insertStyleIdentifiers(into: &live)
+        }
         return cellArena.reclaimAttributes(keeping: live) > 0
     }
     // The requested conformance from DECSCL command
@@ -1149,7 +1156,8 @@ open class Terminal {
     
     public func resetNormalBuffer() {
         // A full reset shows the new buffer right after this, which frees what
-        // the old one held.
+        // the old one held. A host call can leave the old buffer on screen,
+        // and the reclaim then keeps what it holds.
         normalBuffer.creditReclaimWait(discardingFirst: normalBuffer.lines.count)
         normalBuffer = Buffer(cols: cols, rows: rows, tabStopWidth: tabStopWidth,
                               scrollback: options.scrollback, bidiState: currentBidiState,
