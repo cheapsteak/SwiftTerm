@@ -169,6 +169,56 @@ struct StyleReclaimTests {
         #expect(terminal.getCharData(col: 0, row: 0)?.attribute.fg == colour(styleTableCapacity))
     }
 
+    /// A reclaim that frees nothing makes the next one wait, but discarding
+    /// many lines ends that wait, so the next new style reclaims at once.
+    @Test(arguments: [Discard.eraseSavedLines, .clearScrollback, .shrinkHistory, .fullReset])
+    func discardingLinesAfterAFruitlessReclaimReclaimsAtOnce(discard: Discard) {
+        let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 80, rows: 24, scrollback: 1000)
+        terminal.feed(byteArray: colouredCells(0..<styleTableCapacity))
+        // The cells hold every identifier, so this reclaim frees nothing and
+        // the style falls back to the default.
+        terminal.feed(byteArray: colouredCells(styleTableCapacity..<styleTableCapacity + 1))
+        discard.apply(to: terminal)
+
+        terminal.feed(text: "\u{1b}[H")
+        terminal.feed(byteArray: colouredCells(styleTableCapacity + 1..<styleTableCapacity + 2))
+        #expect(terminal.getCharData(col: 0, row: 0)?.attribute.fg == colour(styleTableCapacity + 1))
+    }
+
+    @Test func leavingTheAlternateScreenAfterAFruitlessReclaimReclaimsAtOnce() {
+        let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 80, rows: 24, scrollback: 1000)
+        let onAlternateScreen = 1000
+        terminal.feed(byteArray: colouredCells(0..<styleTableCapacity - onAlternateScreen))
+        // From the top, so the alternate screen keeps all its cells.
+        terminal.feed(text: "\u{1b}[?1049h\u{1b}[H")
+        terminal.feed(byteArray: colouredCells(styleTableCapacity - onAlternateScreen..<styleTableCapacity))
+        // Both screens together hold every identifier, so this reclaim frees nothing.
+        terminal.feed(byteArray: colouredCells(styleTableCapacity..<styleTableCapacity + 1))
+
+        // Leaving clears the alternate screen and frees what it held.
+        terminal.feed(text: "\u{1b}[?1049l\u{1b}[H")
+        #expect(!terminal.isCurrentBufferAlternate)
+        terminal.feed(byteArray: colouredCells(styleTableCapacity + 1..<styleTableCapacity + 2))
+        #expect(terminal.getCharData(col: 0, row: 0)?.attribute.fg == colour(styleTableCapacity + 1))
+    }
+
+    @Test func discardingCellsEndsTheWaitAfterAFruitlessReclaim() throws {
+        let arena = CellArena(styleCapacity: 64)
+        var live = StyleIdentifierSet()
+        for index in 1...64 {
+            let identifier = try #require(arena.intern(attribute: attribute(index)))
+            live.insert(identifier)
+        }
+        #expect(arena.intern(attribute: attribute(65)) == nil)
+        #expect(arena.reclaimAttributes(keeping: live) == 0)
+        #expect(arena.intern(attribute: attribute(66)) == nil)
+        #expect(!arena.canReclaimAttributes)
+
+        arena.allowReclaimAtNextMiss()
+        #expect(arena.intern(attribute: attribute(67)) == nil)
+        #expect(arena.canReclaimAttributes)
+    }
+
     @Test func snapshotCopiesFollowAReclaim() throws {
         let arena = CellArena(styleCapacity: 3)
         let first = try #require(arena.intern(attribute: attribute(1)))

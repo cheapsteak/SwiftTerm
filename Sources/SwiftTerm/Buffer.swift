@@ -825,6 +825,7 @@ public final class Buffer {
 
         _lines = CircularBufferLineList (maxLength: getCorrectBufferLength(rows))
         setupLinesCallbacks()
+        cellArena.allowReclaimAtNextMiss()
         _linesWithImagesCount = 0
         scrollTop = 0
         scrollBottom = rows - 1
@@ -1022,6 +1023,7 @@ public final class Buffer {
         }
         let amountToTrim = yBase
         lines.trimStart (count: amountToTrim)
+        cellArena.allowReclaimAtNextMiss()
         yBase = 0
         yDisp = 0
         savedY = max (savedY - amountToTrim, 0)
@@ -1044,6 +1046,7 @@ public final class Buffer {
                 let amountToTrim = lines.count - newMaxLength
                 if amountToTrim > 0 {
                     lines.trimStart(count: amountToTrim)
+                    cellArena.allowReclaimAtNextMiss()
                     yBase = max(yBase - amountToTrim, 0)
                     yDisp = max(yDisp - amountToTrim, 0)
                     savedY = max(savedY - amountToTrim, 0)

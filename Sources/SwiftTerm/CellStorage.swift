@@ -557,6 +557,15 @@ final class CellArena {
     /// style, and those styles fall back to the default attribute meanwhile.
     private var attributeReclaimInterval: Int { max(1, attributeCapacity / 16) }
 
+    /// Lets the next new attribute that finds the table full reclaim at once,
+    /// without waiting for ``attributeReclaimInterval`` more of them. Call it
+    /// after discarding many cells at once, since the identifiers they held
+    /// may now be free.
+    func allowReclaimAtNextMiss() {
+        attributeMissesSinceReclaim = max(attributeMissesSinceReclaim,
+                                          attributeReclaimInterval)
+    }
+
     /// True when every identifier has been handed out, none is free, and
     /// enough new attributes have arrived since the last reclaim.
     var canReclaimAttributes: Bool {

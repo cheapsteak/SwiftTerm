@@ -1124,6 +1124,8 @@ open class Terminal {
         normalBuffer = Buffer(cols: cols, rows: rows, tabStopWidth: tabStopWidth,
                               scrollback: options.scrollback, bidiState: currentBidiState,
                               arena: cellArena)
+        // The old buffer's cells no longer hold their style identifiers.
+        cellArena.allowReclaimAtNextMiss()
         normalBuffer.terminal = self
 
         normalBuffer.fillViewportRows()
@@ -3719,6 +3721,7 @@ open class Terminal {
             let scrollBackSize = buffer.lines.count - rows
             if scrollBackSize > 0 {
                 buffer.lines.trimStart (count: scrollBackSize)
+                cellArena.allowReclaimAtNextMiss()
                 buffer.linesTop = 0
                 buffer.yBase = max (buffer.yBase - scrollBackSize, 0)
                 buffer.yDisp = max (buffer.yDisp - scrollBackSize, 0)
