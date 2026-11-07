@@ -747,6 +747,12 @@ public final class Buffer {
     func getPackedBlankCell(attribute: Attribute) -> PackedCell {
         cellArena.pack(attribute: attribute, scalar: 0, widthState: .narrow)!
     }
+
+    /// Adds every style identifier this buffer's lines hold, scrollback
+    /// included, to `set`.
+    func insertStyleIdentifiers(into set: inout StyleIdentifierSet) {
+        _lines.insertStyleIdentifiers(into: &set)
+    }
     
     public func getBlankLine (attribute: Attribute, isWrapped: Bool = false) -> BufferLine
     {

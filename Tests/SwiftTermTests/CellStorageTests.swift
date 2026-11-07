@@ -405,7 +405,9 @@ struct CellStorageTests {
         #expect(empty.packedAttribute(at: 0) == CharData.defaultAttr)
     }
 
-    @Test func terminalDegradesAfterAttributeArenaIsFull() {
+    /// The last of these styles finds the arena full. The terminal reclaims
+    /// the identifiers its cells no longer hold, so the pen keeps the style.
+    @Test func terminalReclaimsStylesAfterAttributeArenaIsFull() {
         let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 2, rows: 2)
         var input = ""
         input.reserveCapacity(1_500_000)
@@ -415,6 +417,6 @@ struct CellStorageTests {
 
         terminal.feed(text: input)
 
-        #expect(terminal.currentAttribute == CharData.defaultAttr)
+        #expect(terminal.currentAttribute.fg == .trueColor(red: 255, green: 255, blue: 1))
     }
 }

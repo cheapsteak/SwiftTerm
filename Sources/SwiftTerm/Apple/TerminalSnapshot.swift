@@ -347,8 +347,13 @@ final class TerminalSnapshot {
 
         let buffer = terminal.displayBuffer
         let sourceArena = buffer.cellArena
+        // The copy is replaced on the first refresh and after the terminal
+        // reclaims style identifiers. Every row is then copied again, so all
+        // rows decode through one arena and one identifier epoch.
+        var arenaReplaced = false
         if cellArenaSnapshot?.synchronizeSnapshotPrefix(from: sourceArena) != true {
             cellArenaSnapshot = sourceArena.snapshotCopy()
+            arenaReplaced = true
         }
         let snapshotArena = cellArenaSnapshot!
         let newStyle = SnapshotStyle(
@@ -398,8 +403,8 @@ final class TerminalSnapshot {
             let absoluteRow = firstRow + index
             let source = buffer.lines[absoluteRow]
             let destination = rows[index]
-            let contentChanged = destination.sourceIdentity !=
-                ObjectIdentifier(source.renderIdentity) ||
+            let contentChanged = arenaReplaced ||
+                destination.sourceIdentity != ObjectIdentifier(source.renderIdentity) ||
                 destination.sourceGeneration != source.generation
             let bidiRevision = TerminalBidi.layoutRevision(
                 row: absoluteRow, buffer: buffer,

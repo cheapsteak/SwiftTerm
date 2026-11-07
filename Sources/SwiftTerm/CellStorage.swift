@@ -277,10 +277,29 @@ struct InternedAttributeKey: Hashable {
     }
 }
 
+/// A set of style identifiers, one bit per identifier.
+struct StyleIdentifierSet {
+    private var words = [UInt64](repeating: 0, count: (Int(UInt16.max) + 1) / 64)
+
+    @inline(__always)
+    mutating func insert(_ identifier: UInt16) {
+        words[Int(identifier &>> 6)] |= 1 &<< UInt64(identifier & 63)
+    }
+
+    @inline(__always)
+    func contains(_ identifier: UInt16) -> Bool {
+        words[Int(identifier &>> 6)] & (1 &<< UInt64(identifier & 63)) != 0
+    }
+}
+
 /// Stable lookup data shared by packed cells in one terminal.
 ///
-/// Entries are immutable and identifiers are never reused. This permits a raw
-/// packed cell to remain valid after it moves to another line or snapshot.
+/// Grapheme entries are immutable and their identifiers are never reused.
+/// Style identifiers stay fixed while any holder uses them, so a raw packed
+/// cell remains valid after it moves to another line. Once every style
+/// identifier has been handed out, the owning terminal can release the ones
+/// that no cell or cached cell still holds (``reclaimAttributes(keeping:)``),
+/// and later interns reuse them. A reclaim starts a new ``attributeEpoch``.
 final class CellArena {
     private final class Identity: Sendable {}
 
@@ -296,6 +315,22 @@ final class CellArena {
     private let attributes: UnsafeMutablePointer<Attribute>
     private var attributeCountValue = 1
     private var attributeIdentifiers: [InternedAttributeKey: UInt16] = [:]
+
+    /// Identifiers that the last reclaim released and no intern has reused
+    /// yet. The lowest identifier is last, so it is reused first.
+    private var freeAttributeIdentifiers: [UInt16] = []
+    /// Counts reclaims that released an identifier. A snapshot copy carries
+    /// the epoch of its source, and it can synchronize only within it.
+    private(set) var attributeEpoch: UInt64 = 0
+    /// Identifiers handed to a new attribute since the epoch began, in order.
+    /// Snapshot copies replay this to pick up the new entries.
+    private var reusedAttributeIdentifiers: [UInt16] = []
+    /// For a snapshot copy, how much of the source's reuse list it applied.
+    private var appliedAttributeReuseCount = 0
+    /// New attributes requested from a full table since the last reclaim.
+    /// It starts above the reclaim interval so the first full table can
+    /// reclaim at once.
+    private var attributeMissesSinceReclaim = Int(UInt16.max)
 
     private let graphemeBlocks: UnsafeMutablePointer<UnsafeMutablePointer<[UInt32]?>?>
     private let graphemeCapacity: Int
@@ -348,6 +383,9 @@ final class CellArena {
         attributes.initialize(from: source.attributes,
                               count: source.attributeCountValue)
         attributeCountValue = source.attributeCountValue
+        // The copy holds every entry the source holds now, reused ones included.
+        attributeEpoch = source.attributeEpoch
+        appliedAttributeReuseCount = source.reusedAttributeIdentifiers.count
         // Snapshot rows decode existing cells. Keep only the default reverse
         // lookup that the out-of-range blank-cell path can request.
         attributeIdentifiers = [InternedAttributeKey(CharData.defaultAttr): 0]
@@ -380,14 +418,19 @@ final class CellArena {
         CellArena(snapshotOf: self)
     }
 
-    /// Extends a snapshot arena with identifiers that its live source appended.
+    /// Extends a snapshot arena with identifiers that its live source appended
+    /// or reused.
     ///
     /// The terminal lock must protect `source`, and the render owner must have
     /// exclusive access to this snapshot arena. Counts are published only
-    /// after their entries are copied.
+    /// after their entries are copied. Returns false when the source has
+    /// reclaimed identifiers since this copy was made, and the caller then
+    /// replaces the copy.
     func synchronizeSnapshotPrefix(from source: CellArena) -> Bool {
         guard isSnapshotCopy,
               snapshotSourceIdentity === source.identity,
+              attributeEpoch == source.attributeEpoch,
+              source.reusedAttributeIdentifiers.count >= appliedAttributeReuseCount,
               source.attributeCountValue >= attributeCountValue,
               source.graphemeCountValue >= graphemeCountValue,
               source.attributeCountValue <= attributeCapacity + 1,
@@ -405,6 +448,20 @@ final class CellArena {
 #if DEBUG
             snapshotAttributeEntriesCopied += newAttributeCount
 #endif
+        }
+
+        // A reused identifier lies inside the copied prefix and now names a
+        // different attribute.
+        let reuseCount = source.reusedAttributeIdentifiers.count
+        if reuseCount > appliedAttributeReuseCount {
+            for index in appliedAttributeReuseCount..<reuseCount {
+                let identifier = Int(source.reusedAttributeIdentifiers[index])
+                attributes[identifier] = source.attributes[identifier]
+            }
+#if DEBUG
+            snapshotAttributeEntriesCopied += reuseCount - appliedAttributeReuseCount
+#endif
+            appliedAttributeReuseCount = reuseCount
         }
 
         let oldGraphemeCount = Int(graphemeCountValue)
@@ -438,6 +495,8 @@ final class CellArena {
     /// True when raw cells from `source` can be decoded without re-packing.
     func preservesEncoding(from source: CellArena) -> Bool {
         isSnapshotCopy && snapshotSourceIdentity === source.identity &&
+            attributeEpoch == source.attributeEpoch &&
+            appliedAttributeReuseCount >= source.reusedAttributeIdentifiers.count &&
             attributeCountValue >= source.attributeCountValue &&
             graphemeCountValue >= source.graphemeCountValue
     }
@@ -468,7 +527,7 @@ final class CellArena {
             return nil
         }
         guard attributeCountValue <= attributeCapacity else {
-            return nil
+            return internInFullTable(attribute, key: key)
         }
 
         let identifier = UInt16(attributeCountValue)
@@ -476,6 +535,75 @@ final class CellArena {
         attributeCountValue += 1
         attributeIdentifiers[key] = identifier
         return identifier
+    }
+
+    /// Interns a new attribute once every identifier has been handed out, by
+    /// reusing one that a reclaim released. Returns nil when none is free.
+    private func internInFullTable(_ attribute: Attribute,
+                                   key: InternedAttributeKey) -> UInt16? {
+        attributeMissesSinceReclaim &+= 1
+        guard let identifier = freeAttributeIdentifiers.popLast() else {
+            return nil
+        }
+        attributes[Int(identifier)] = attribute
+        attributeIdentifiers[key] = identifier
+        reusedAttributeIdentifiers.append(identifier)
+        return identifier
+    }
+
+    /// New attributes a full table must see after a reclaim before the next
+    /// one may run. A terminal whose cells still hold nearly every identifier
+    /// then pays for one scan per this many new styles rather than one per
+    /// style, and those styles fall back to the default attribute meanwhile.
+    private var attributeReclaimInterval: Int { max(1, attributeCapacity / 16) }
+
+    /// True when every identifier has been handed out, none is free, and
+    /// enough new attributes have arrived since the last reclaim.
+    var canReclaimAttributes: Bool {
+        !isSnapshotCopy &&
+            attributeCountValue > attributeCapacity &&
+            freeAttributeIdentifiers.isEmpty &&
+            attributeMissesSinceReclaim >= attributeReclaimInterval
+    }
+
+    /// Releases every style identifier that `live` does not contain, so later
+    /// interns can reuse it.
+    ///
+    /// `live` must hold every identifier that a cell or cached cell of the
+    /// owning terminal still uses. A released identifier is later handed to a
+    /// different attribute, so a holder left out of `live` would change
+    /// colour. Identifier 0, the default attribute, is always kept. When
+    /// anything is released, a new ``attributeEpoch`` begins and snapshot
+    /// copies of this arena stop synchronizing.
+    ///
+    /// - Returns: The number of identifiers released.
+    @discardableResult
+    func reclaimAttributes(keeping live: StyleIdentifierSet) -> Int {
+        precondition(!isSnapshotCopy, "A snapshot arena cannot reclaim identifiers")
+        attributeMissesSinceReclaim = 0
+
+        // Rebuild the reverse lookup from the kept entries, so no key can
+        // name an identifier that is about to name a different attribute.
+        attributeIdentifiers.removeAll(keepingCapacity: true)
+        attributeIdentifiers[InternedAttributeKey(attributes[0])] = 0
+        var released: [UInt16] = []
+        for raw in stride(from: attributeCountValue - 1, to: 0, by: -1) {
+            let identifier = UInt16(raw)
+            if live.contains(identifier) {
+                attributeIdentifiers[InternedAttributeKey(attributes[raw])] = identifier
+            } else {
+                released.append(identifier)
+            }
+        }
+        // Descending order puts the lowest identifier last, where
+        // `popLast()` takes it first.
+        freeAttributeIdentifiers = released
+        guard !released.isEmpty else {
+            return 0
+        }
+        attributeEpoch &+= 1
+        reusedAttributeIdentifiers.removeAll(keepingCapacity: true)
+        return released.count
     }
 
     /// Creates a scalar cell from an attribute identifier that is already
@@ -1001,6 +1129,13 @@ final class CellStoragePage {
             result.setCell(cell(at: index), at: index)
         }
         return result
+    }
+
+    /// Adds the style identifier of every cell to `set`.
+    func insertStyleIdentifiers(into set: inout StyleIdentifierSet) {
+        for cell in cells {
+            set.insert(cell.styleID)
+        }
     }
 
     // Compatibility diagnostics used by storage tests.

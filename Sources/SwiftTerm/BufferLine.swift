@@ -334,6 +334,13 @@ public final class BufferLine: CustomDebugStringConvertible {
 
     var cellArena: CellArena { storage.arena }
 
+    /// Adds every style identifier this line holds to `set`, including that
+    /// of the blank cell a later clear may leave in place.
+    func insertStyleIdentifiers(into set: inout StyleIdentifierSet) {
+        storage.insertStyleIdentifiers(into: &set)
+        set.insert(tailBlankCell.styleID)
+    }
+
     func adoptArena(_ arena: CellArena) {
         guard storage.arena !== arena else { return }
         let tailAttribute = storage.arena.attribute(for: tailBlankCell)

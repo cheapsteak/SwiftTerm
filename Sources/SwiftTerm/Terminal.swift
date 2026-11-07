@@ -708,7 +708,10 @@ open class Terminal {
     private func setCurrentAttribute(_ attribute: Attribute) {
         guard attribute != curAttr else { return }
 
-        let styleID = cellArena.intern(attribute: attribute)
+        var styleID = cellArena.intern(attribute: attribute)
+        if styleID == nil && reclaimStyleIdentifiers() {
+            styleID = cellArena.intern(attribute: attribute)
+        }
         let effectiveAttribute = styleID == nil ? CharData.defaultAttr : attribute
         let effectiveStyleID = styleID ?? 0
         let backgroundChanged = effectiveAttribute.bg != curAttr.bg
@@ -733,6 +736,32 @@ open class Terminal {
         currentEraseAttribute = eraseAttribute
         currentEraseBlankCell = eraseBlank
         currentEraseSpaceCell = eraseSpace
+    }
+
+    /// Releases the style identifiers that nothing in this terminal still
+    /// uses, so a new style can have one. It runs only when the cell arena has
+    /// handed out every identifier, so the print and intern paths never pay
+    /// for it.
+    ///
+    /// The holders are the cells of both screens, scrollback included, the
+    /// current pen and the cached erase cells. Saved cursors keep their
+    /// attribute by value and intern it again on restore, so they hold no
+    /// identifier.
+    ///
+    /// Reclaim cannot help when the cells still use every identifier, as when
+    /// scrollback alone holds 65,535 distinct styles. Nothing is released
+    /// then, and the new style falls back to the default attribute.
+    ///
+    /// - Returns: true when an identifier was released.
+    private func reclaimStyleIdentifiers() -> Bool {
+        guard cellArena.canReclaimAttributes else { return false }
+        var live = StyleIdentifierSet()
+        live.insert(curStyleID)
+        live.insert(currentEraseBlankCell.styleID)
+        live.insert(currentEraseSpaceCell.styleID)
+        normalBuffer.insertStyleIdentifiers(into: &live)
+        altBuffer.insertStyleIdentifiers(into: &live)
+        return cellArena.reclaimAttributes(keeping: live) > 0
     }
     // The requested conformance from DECSCL command
     enum TerminalConformance: Sendable {

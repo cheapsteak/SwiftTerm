@@ -251,6 +251,14 @@ internal class CircularBufferLineList {
         startIndex
     }
 
+    /// Adds the style identifiers of every line the list stores to `set`,
+    /// including lines in slots outside `0..<count`.
+    func insertStyleIdentifiers(into set: inout StyleIdentifierSet) {
+        for case let line? in array {
+            line.insertStyleIdentifiers(into: &set)
+        }
+    }
+
     private var _count: Int
     var maxLength: Int {
         didSet {
