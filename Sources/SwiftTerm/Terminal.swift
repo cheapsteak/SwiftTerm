@@ -1155,10 +1155,12 @@ open class Terminal {
     }
     
     public func resetNormalBuffer() {
-        // A full reset shows the new buffer right after this, which frees what
-        // the old one held. A host call can leave the old buffer on screen,
-        // and the reclaim then keeps what it holds.
-        normalBuffer.creditReclaimWait(discardingFirst: normalBuffer.lines.count)
+        // An old buffer that is on screen stays there after this, and the
+        // reclaim keeps what it holds, so its styles are not credited here.
+        // A full reset credits them once it has switched away from it.
+        if buffer !== normalBuffer {
+            normalBuffer.creditReclaimWait(discardingFirst: normalBuffer.lines.count)
+        }
         normalBuffer = Buffer(cols: cols, rows: rows, tabStopWidth: tabStopWidth,
                               scrollback: options.scrollback, bidiState: currentBidiState,
                               arena: cellArena)
@@ -1247,8 +1249,14 @@ open class Terminal {
         _rows = max (options.rows, MINIMUM_ROWS)
         
         if isReset {
+            let displayed = buffer
             resetNormalBuffer()
             activateNormalBuffer(clearAlt: false)
+            // The switch takes the old normal buffer off screen, so the
+            // styles it held may be free now.
+            if displayed !== altBuffer && displayed !== buffer {
+                displayed.creditReclaimWait(discardingFirst: displayed.lines.count)
+            }
             resetSemanticPromptState(clearingScreenMarks: true)
         } else {
             let oldNormalCols = normalBuffer.cols

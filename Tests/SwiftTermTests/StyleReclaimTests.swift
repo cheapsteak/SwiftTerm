@@ -230,6 +230,28 @@ struct StyleReclaimTests {
         #expect(kept == (0..<onScreen).map { Optional(colour($0)) })
     }
 
+    /// A host's own call to `resetNormalBuffer()` while the normal screen
+    /// shows leaves the old buffer on screen, where the reclaim keeps its
+    /// styles, so they must not end the wait.
+    @Test func resettingTheDisplayedNormalBufferDoesNotEndTheWait() {
+        let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 80, rows: 24, scrollback: 1000)
+        // The cells hold every identifier but the last, which only the pen
+        // held before the reset to the default style.
+        terminal.feed(byteArray: colouredCells(0..<styleTableCapacity - 1))
+        terminal.feed(byteArray: penChanges(styleTableCapacity - 1..<styleTableCapacity))
+        terminal.feed(text: "\u{1b}[0m")
+        // The next colour reclaims that identifier and starts the wait, and
+        // resetting the pen leaves it unused again.
+        terminal.feed(byteArray: penChanges(styleTableCapacity..<styleTableCapacity + 1))
+        terminal.feed(text: "\u{1b}[0m")
+        #expect(terminal.buffer.cellArena.attributeEpoch == 1)
+
+        // Ending the wait here would let the next colour reclaim it again.
+        terminal.resetNormalBuffer()
+        terminal.feed(byteArray: penChanges(styleTableCapacity + 1..<styleTableCapacity + 2))
+        #expect(terminal.buffer.cellArena.attributeEpoch == 1)
+    }
+
     /// Lines discarded from the scrollback leave the buffer's line slots, so
     /// the scan no longer counts them as holders.
     @Test(arguments: [Discard.eraseSavedLines, .clearScrollback])
@@ -247,7 +269,8 @@ struct StyleReclaimTests {
     /// A reclaim that frees nothing makes the next one wait. Discarded lines
     /// count each distinct identifier they held toward the wait, so
     /// discarding a scrollback that holds nearly every one ends it, and the
-    /// next new style reclaims at once.
+    /// next new style reclaims at once. A guard: ending the wait on every
+    /// discard passes it too, and it fails if the credit falls short.
     @Test(arguments: [Discard.eraseSavedLines, .clearScrollback, .shrinkHistory, .fullReset])
     func discardingLinesAfterAFruitlessReclaimReclaimsAtOnce(discard: Discard) {
         let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 80, rows: 24, scrollback: 1000)
@@ -264,7 +287,9 @@ struct StyleReclaimTests {
 
     /// Leaving the alternate screen counts each distinct identifier it held
     /// as one new style toward the wait, so leaving one that held more than
-    /// the wait's 4,095 lets the next new style reclaim at once.
+    /// the wait's 4,095 lets the next new style reclaim at once. A guard:
+    /// ending the wait on every exit passes it too, and it fails if the
+    /// credit falls short.
     @Test func leavingAnAlternateScreenThatHeldManyStylesReclaimsAtOnce() {
         let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 200, rows: 50, scrollback: 1000)
         let onAlternateScreen = 5000
@@ -565,10 +590,11 @@ struct StyleReclaimRenderTests {
         #expect(row.line.packedView(at: 2).attribute.fg == colour(styleTableCapacity + 1))
     }
 
-    /// Rows that leave the screen go to a pool. One that returns after a
-    /// reclaim, over a line that has not changed, is copied again through the
-    /// current arena copy.
-    @Test func rowsFromThePoolDecodeThroughTheCurrentArenaCopy() {
+    /// A guard. Rows that leave the screen go to a pool, and replacing the
+    /// arena copy empties it, so rows that come back on screen after a
+    /// reclaim, over lines that have not changed, are new or copied again.
+    /// Each must decode through the current arena copy.
+    @Test func rowsShownAgainAfterAReclaimDecodeThroughTheCurrentArenaCopy() {
         let view = TerminalView(frame: .zero, font: nil,
                                 options: TerminalOptions(cols: 12, rows: 4, scrollback: 10))
         let snapshot = TerminalSnapshot()

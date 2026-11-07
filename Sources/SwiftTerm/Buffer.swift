@@ -839,8 +839,9 @@ public final class Buffer {
         x = 0
         y = 0
 
-        // Every exit from the alternate screen clears it. Entering that screen
-        // already builds as many blank cells as the count walks.
+        // Leaving the alternate screen through mode 1047 or 1049 clears it,
+        // though leaving through mode 47 does not. The next entry builds as
+        // many blank cells as the count walks.
         creditReclaimWait(discardingFirst: _lines.count)
         _lines = CircularBufferLineList (maxLength: getCorrectBufferLength(rows))
         setupLinesCallbacks()
