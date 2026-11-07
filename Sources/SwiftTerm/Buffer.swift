@@ -176,14 +176,18 @@ public final class Buffer {
      */
     public var savedY: Int
 
+    // The four saved modes are readable so an embedder that serializes the
+    // screen can tell what a later restore (DECRC, `?1049l`) will put back.
+    // Only the terminal's own save-cursor path writes them.
+
     /// Saved state for the origin mode
-    var savedOriginMode: Bool = false
-    /// Saved state for the origin mode
-    var savedMarginMode: Bool = false
+    public internal(set) var savedOriginMode: Bool = false
+    /// Saved state for the left and right margin mode
+    public internal(set) var savedMarginMode: Bool = false
     /// Saved state for the wrap around mode
-    var savedWraparound: Bool = false
+    public internal(set) var savedWraparound: Bool = false
     /// Saved state for the reverse wrap around mode
-    var savedReverseWraparound: Bool = false
+    public internal(set) var savedReverseWraparound: Bool = false
 
     /**
      * The left margin, 0-indexed, used when marginMode is turned on
