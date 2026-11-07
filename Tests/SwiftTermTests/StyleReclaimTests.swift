@@ -448,6 +448,30 @@ struct StyleReclaimTests {
         #expect(terminal.getCharData(col: 0, row: 0)?.attribute.fg == colour(styleTableCapacity + 1))
     }
 
+    /// A scroll region that does not start at the top row shifts its lines in
+    /// place and clears its top line for reuse at its bottom, so the styles
+    /// that line held count toward the wait. Here nothing else credits it.
+    @Test func scrollingARegionAfterAFruitlessReclaimEndsTheWait() {
+        let rows = 50
+        let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 300, rows: rows,
+                                                             scrollback: 1000)
+        // 219 lines, all of which the scrollback keeps, hold every identifier,
+        // so the reclaim the next colour starts frees nothing, and the wait
+        // begins.
+        terminal.feed(byteArray: colouredCells(0..<styleTableCapacity))
+        terminal.feed(byteArray: penChanges(styleTableCapacity..<styleTableCapacity + 1))
+
+        // Rows 2 through 50 hold 14,535 of the identifiers, more than the
+        // wait's 4,095. Scrolling the region they form by its height clears
+        // every one of them, and nothing leaves the scrollback.
+        terminal.feed(text: "\u{1b}[2;\(rows)r\u{1b}[\(rows)H")
+        terminal.feed(text: String(repeating: "\n", count: rows - 1))
+        terminal.feed(text: "\u{1b}[r\u{1b}[H")
+
+        terminal.feed(byteArray: colouredCells(styleTableCapacity + 1..<styleTableCapacity + 2))
+        #expect(terminal.getCharData(col: 0, row: 0)?.attribute.fg == colour(styleTableCapacity + 1))
+    }
+
     /// Within one feed, a selected cell can be overwritten, its identifier
     /// released and reused, and the same character printed with it again.
     /// The raw cell is then unchanged although its colour is not.
@@ -526,6 +550,31 @@ struct StyleReclaimTests {
         // A reclaim that frees enough starts again at the first wait.
         #expect(arena.reclaimAttributes(keeping: StyleIdentifierSet()) == 64)
         #expect(arena.attributeReclaimInterval == 4)
+    }
+
+    /// In a full-size table the base wait is 4,095 new styles, and a reclaim
+    /// must release 1/16 of that, 255 identifiers, to start the wait again at
+    /// the base. One that releases 254 right after one that released nothing
+    /// doubles it.
+    @Test(arguments: zip([254, 255], [8190, 4095]))
+    func aReclaimMustRelease255IdentifiersToKeepTheBaseWait(released: Int, wait: Int) throws {
+        let arena = CellArena(styleCapacity: styleTableCapacity)
+        var live = StyleIdentifierSet()
+        for index in 1...styleTableCapacity {
+            let identifier = try #require(arena.intern(attribute: attribute(index)))
+            live.insert(identifier)
+        }
+        // The first reclaim in a row that frees nothing keeps the base wait.
+        #expect(arena.reclaimAttributes(keeping: live) == 0)
+        #expect(arena.attributeReclaimInterval == 4095)
+
+        // Identifiers 1 through `released` lose their holders.
+        var kept = StyleIdentifierSet()
+        for identifier in released + 1...styleTableCapacity {
+            kept.insert(UInt16(identifier))
+        }
+        #expect(arena.reclaimAttributes(keeping: kept) == released)
+        #expect(arena.attributeReclaimInterval == wait)
     }
 
     /// DECCRA copies styled rows for a few bytes, so a loop can copy rows,
