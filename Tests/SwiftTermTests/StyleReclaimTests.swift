@@ -79,6 +79,24 @@ struct StyleReclaimTests {
         }
     }
 
+    /// Ways to replace the normal buffer while the alternate screen shows.
+    enum NormalBufferReplacement: Sendable {
+        /// A host's own call to `resetNormalBuffer()`, after which the
+        /// alternate screen still shows.
+        case hostCall
+        /// RIS, which then shows the new normal buffer.
+        case fullReset
+
+        func apply(to terminal: Terminal) {
+            switch self {
+            case .hostCall:
+                terminal.resetNormalBuffer()
+            case .fullReset:
+                terminal.feed(text: "\u{1b}c")
+            }
+        }
+    }
+
     /// Discards that output can repeat for a few bytes a time, and that keep
     /// the alternate screen's cells.
     enum RepeatedDiscard: Sendable {
@@ -250,6 +268,27 @@ struct StyleReclaimTests {
         terminal.resetNormalBuffer()
         terminal.feed(byteArray: penChanges(styleTableCapacity + 1..<styleTableCapacity + 2))
         #expect(terminal.buffer.cellArena.attributeEpoch == 1)
+    }
+
+    /// Replacing the normal buffer while the alternate screen shows drops the
+    /// old one, which no screen shows and no reclaim scans any more, so the
+    /// styles it held count toward the wait.
+    @Test(arguments: [NormalBufferReplacement.hostCall, .fullReset])
+    func replacingTheNormalBufferBehindTheAlternateScreenEndsTheWait(
+        replacement: NormalBufferReplacement
+    ) {
+        let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 80, rows: 24, scrollback: 1000)
+        // The normal buffer's cells hold every identifier, so the reclaim the
+        // next colour starts frees nothing, and the wait begins.
+        terminal.feed(byteArray: colouredCells(0..<styleTableCapacity))
+        terminal.feed(text: "\u{1b}[?1049h")
+        terminal.feed(byteArray: penChanges(styleTableCapacity..<styleTableCapacity + 1))
+
+        replacement.apply(to: terminal)
+        #expect(terminal.isCurrentBufferAlternate == (replacement == .hostCall))
+        terminal.feed(text: "\u{1b}[H")
+        terminal.feed(byteArray: colouredCells(styleTableCapacity + 1..<styleTableCapacity + 2))
+        #expect(terminal.getCharData(col: 0, row: 0)?.attribute.fg == colour(styleTableCapacity + 1))
     }
 
     /// Lines discarded from the scrollback leave the buffer's line slots, so
