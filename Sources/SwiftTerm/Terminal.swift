@@ -1256,13 +1256,13 @@ open class Terminal {
             normalBuffer.resize(newCols: cols, newRows: rows)
             altBuffer.resize(newCols: cols, newRows: rows)
             // `Buffer.resize` gives the columns it adds no tab stops. Lay the
-            // default stops from the old width on, as `resize(cols:rows:)`
-            // does, so stops the host set in the old columns stay.
-            if oldNormalCols != cols {
-                normalBuffer.setupTabStops(index: oldNormalCols, tabStopWidth: tabStopWidth)
+            // default stops in those columns only, so the stops the host set
+            // or cleared in the old columns stay as they are.
+            if cols > oldNormalCols {
+                normalBuffer.setupTabStops(newColumnsFrom: oldNormalCols, tabStopWidth: tabStopWidth)
             }
-            if oldAltCols != cols {
-                altBuffer.setupTabStops(index: oldAltCols, tabStopWidth: tabStopWidth)
+            if cols > oldAltCols {
+                altBuffer.setupTabStops(newColumnsFrom: oldAltCols, tabStopWidth: tabStopWidth)
             }
         }
         cursorHidden = false

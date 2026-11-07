@@ -63,6 +63,40 @@ final class TabStopsAtCreationWidthTests {
         #expect(terminal.buffer.x == 96)
     }
 
+    /// Narrowing through `setup()` adds no columns, so it leaves the stops
+    /// the host set and cleared as they are.
+    @Test func setupAtANarrowerWidthKeepsTheHostsStops() {
+        let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 120, rows: 24)
+        // TBC 3 clears every stop, then HTS sets one at column 50.
+        terminal.feed(text: "\u{1b}[3g\u{1b}[1;51H\u{1b}H")
+        terminal.options.cols = 100
+        terminal.setup()
+        #expect(terminal.cols == 100)
+
+        terminal.feed(text: "\u{1b}[1;1H\t")
+        #expect(terminal.buffer.x == 50)
+        // No stop follows it, so the next tab goes to the last column.
+        terminal.feed(text: "\t")
+        #expect(terminal.buffer.x == 99)
+    }
+
+    /// Widening through `setup()` lays default stops in the new columns only,
+    /// so the stops the host cleared in the old ones stay cleared.
+    @Test func setupAtAWiderWidthKeepsTheHostsStops() {
+        let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 80, rows: 24)
+        // TBC 3 clears every stop, then HTS sets one at column 50.
+        terminal.feed(text: "\u{1b}[3g\u{1b}[1;51H\u{1b}H")
+        terminal.options.cols = 120
+        terminal.setup()
+        #expect(terminal.cols == 120)
+
+        terminal.feed(text: "\u{1b}[1;1H\t")
+        #expect(terminal.buffer.x == 50)
+        // The next stop is the first default one in the new columns.
+        terminal.feed(text: "\t")
+        #expect(terminal.buffer.x == 80)
+    }
+
     @Test func resizeAfterCreationExtendsTheStops() {
         let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 120, rows: 24)
         terminal.feed(text: "\u{1b}[1;89H\t")

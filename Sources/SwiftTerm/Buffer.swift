@@ -1161,6 +1161,17 @@ public final class Buffer {
         }
     }
     
+    /// Sets the default tab stops in the columns from `oldCols` on, which a
+    /// wider `resize(newCols:newRows:)` adds without stops. The old columns
+    /// keep their stops as they are, set or cleared.
+    func setupTabStops(newColumnsFrom oldCols: Int, tabStopWidth: Int)
+    {
+        let firstStop = (max(oldCols, 0) + tabStopWidth - 1) / tabStopWidth * tabStopWidth
+        for column in stride(from: firstStop, to: min(cols, tabStops.count), by: tabStopWidth) {
+            tabStops [column] = true
+        }
+    }
+
     func tabSet (pos : Int)
     {
         if pos < tabStops.count {
