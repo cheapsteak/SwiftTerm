@@ -336,6 +336,34 @@ struct StyleReclaimRenderTests {
         #expect(row.line.packedView(at: 2).attribute.fg == colour(styleTableCapacity + 1))
     }
 
+    /// Rows that leave the screen go to a pool. One that returns after a
+    /// reclaim, over a line that has not changed, is copied again through the
+    /// current arena copy.
+    @Test func rowsFromThePoolDecodeThroughTheCurrentArenaCopy() {
+        let view = TerminalView(frame: .zero, font: nil,
+                                options: TerminalOptions(cols: 12, rows: 4, scrollback: 10))
+        let snapshot = TerminalSnapshot()
+        feed(view, Array("A\r\nB\r\nC\r\nD".utf8))
+        refresh(snapshot, from: view)
+
+        // Two rows go to the pool while C and D scroll into view.
+        view.withTerminal { $0.resize(cols: 12, rows: 2) }
+        refresh(snapshot, from: view)
+        #expect(snapshot.rows.count == 2)
+
+        // The last of these reclaims, which replaces the arena copy.
+        feed(view, penChanges(0..<styleTableCapacity + 1))
+        refresh(snapshot, from: view)
+
+        // C and D come back on their pooled rows, and neither line changed.
+        view.withTerminal { $0.resize(cols: 12, rows: 4) }
+        refresh(snapshot, from: view)
+        #expect(snapshot.rows.count == 4)
+        let current = snapshot.rows.first.map { ObjectIdentifier($0.line.cellArena) }
+        let arenas = snapshot.rows.map { ObjectIdentifier($0.line.cellArena) }
+        #expect(arenas.allSatisfy { $0 == current })
+    }
+
     @Test func packedAttributeCacheFollowsAReclaim() throws {
         let view = TerminalView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
         let context = SnapshotRenderContext(viewState: FrameViewState(view: view), style: .empty,
