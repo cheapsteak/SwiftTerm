@@ -1041,13 +1041,9 @@ open class Terminal {
         normalBuffer.terminal = self
         altBuffer.terminal = self
 
+        // The buffers above are built at the default width. `setup()` grows
+        // them to `options.cols` and lays tab stops across the new columns.
         setup()
-
-        // The buffers above are built at the default width, and `setup()`
-        // grows them to `options.cols`. `Buffer.resize` gives the columns it
-        // adds no tab stops, so the default stops are laid once the grid has
-        // its real width.
-        setupTabStops()
     }
 
     deinit {
@@ -1246,8 +1242,19 @@ open class Terminal {
             activateNormalBuffer(clearAlt: false)
             resetSemanticPromptState(clearingScreenMarks: true)
         } else {
+            let oldNormalCols = normalBuffer.cols
+            let oldAltCols = altBuffer.cols
             normalBuffer.resize(newCols: cols, newRows: rows)
             altBuffer.resize(newCols: cols, newRows: rows)
+            // `Buffer.resize` gives the columns it adds no tab stops. Lay the
+            // default stops from the old width on, as `resize(cols:rows:)`
+            // does, so stops the host set in the old columns stay.
+            if oldNormalCols != cols {
+                normalBuffer.setupTabStops(index: oldNormalCols, tabStopWidth: tabStopWidth)
+            }
+            if oldAltCols != cols {
+                altBuffer.setupTabStops(index: oldAltCols, tabStopWidth: tabStopWidth)
+            }
         }
         cursorHidden = false
         

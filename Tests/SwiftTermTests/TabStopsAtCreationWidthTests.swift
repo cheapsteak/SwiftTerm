@@ -45,6 +45,22 @@ final class TabStopsAtCreationWidthTests {
         #expect(terminal.buffer.x == 96)
     }
 
+    /// `setup()` applies a wider `options.cols` to an existing terminal, and
+    /// lays stops across the columns it adds.
+    @Test func setupAtAWiderWidthLaysStopsPastTheOldWidth() {
+        let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 80, rows: 24)
+        terminal.options.cols = 120
+        terminal.setup()
+        #expect(terminal.cols == 120)
+
+        terminal.feed(text: "\u{1b}[1;89H\t")
+        #expect(terminal.buffer.x == 96)
+
+        terminal.feed(text: "\u{1b}[?1049h\u{1b}[1;89H\t")
+        #expect(terminal.isCurrentBufferAlternate)
+        #expect(terminal.buffer.x == 96)
+    }
+
     @Test func resizeAfterCreationExtendsTheStops() {
         let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 120, rows: 24)
         terminal.feed(text: "\u{1b}[1;89H\t")
