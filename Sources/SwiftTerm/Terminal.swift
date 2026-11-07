@@ -7090,6 +7090,12 @@ open class Terminal {
             // row into scrollback. Keep the splice path for that case.
             // Determine whether the buffer is going to be trimmed after insertion.
             let willBufferBeTrimmed = lines.isFull
+            // The first line leaves the buffer, so the styles it held may now
+            // be free. Credit them only while the reclaim wait is on, so
+            // ordinary scrolling pays only for this check.
+            if willBufferBeTrimmed && cellArena.isWaitingToReclaim {
+                cellArena.creditReclaimWait(discarding: lines[0])
+            }
 
             // Insert the line using the fastest method
             if bottomRow == lines.count - 1 {
@@ -7142,6 +7148,11 @@ open class Terminal {
             guard bottomRow < lines.count else {
                 print ("scroll: bottomRow \(bottomRow) >= lines.count \(lines.count), state: yBase=\(buffer.yBase) scrollTop=\(scrollTop) scrollBottom=\(scrollBottom) isAlternate=\(isCurrentBufferAlternate)")
                 return
+            }
+
+            // The region's top line is cleared for reuse at its bottom.
+            if cellArena.isWaitingToReclaim && topRow >= 0 && topRow <= bottomRow {
+                cellArena.creditReclaimWait(discarding: lines[topRow])
             }
 
             if !lines.shiftUpAndRecycle(top: topRow, bottom: bottomRow,

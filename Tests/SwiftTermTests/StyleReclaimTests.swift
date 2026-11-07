@@ -41,6 +41,18 @@ private func colouredCells(_ indices: Range<Int>) -> [UInt8] {
     return bytes
 }
 
+/// A four-cell line whose first cells use `identifiers`, and whose other
+/// cells use the default attribute.
+private func styledLine(_ identifiers: [UInt16], in arena: CellArena) throws -> BufferLine {
+    let line = BufferLine(cols: 4, packedFill: PackedCell(), arena: arena)
+    for (column, identifier) in identifiers.enumerated() {
+        let cell = try #require(arena.pack(styleID: identifier, scalar: 0x41,
+                                           widthState: .narrow))
+        line.setPackedCell(cell, at: column)
+    }
+    return line
+}
+
 /// A terminal keeps colour once it has seen more distinct styles than its
 /// cell arena has identifiers, because it reclaims the identifiers nothing
 /// holds any more.
@@ -324,27 +336,52 @@ struct StyleReclaimTests {
         #expect(terminal.buffer.cellArena.attributeEpoch == 1)
     }
 
-    @Test func discardedIdentifiersCountTowardTheWaitAfterAFruitlessReclaim() throws {
+    @Test func discardedLinesCreditEachIdentifierOnceTowardTheWait() throws {
         let arena = CellArena(styleCapacity: 64)
         var live = StyleIdentifierSet()
+        var identifiers: [UInt16] = []
         for index in 1...64 {
             let identifier = try #require(arena.intern(attribute: attribute(index)))
             live.insert(identifier)
+            identifiers.append(identifier)
         }
         #expect(arena.intern(attribute: attribute(65)) == nil)
         #expect(arena.reclaimAttributes(keeping: live) == 0)
         #expect(arena.isWaitingToReclaim)
 
-        // With 64 identifiers the wait is 4 new attributes. One arrives, and
-        // a discard of cells that held two identifiers counts as two more.
+        // With 64 identifiers the wait is 4 new attributes. A line that holds
+        // two identifiers counts as two, and discarding it again adds nothing.
+        let twoStyles = try styledLine([identifiers[0], identifiers[1]], in: arena)
+        arena.creditReclaimWait(discarding: twoStyles)
+        arena.creditReclaimWait(discarding: twoStyles)
+        // One new attribute makes three.
         #expect(arena.intern(attribute: attribute(66)) == nil)
-        arena.creditReclaimWait(released: 2)
         #expect(arena.isWaitingToReclaim)
         #expect(!arena.canReclaimAttributes)
 
-        arena.creditReclaimWait(released: 1)
+        let oneMore = try styledLine([identifiers[2]], in: arena)
+        arena.creditReclaimWait(discarding: oneMore)
         #expect(!arena.isWaitingToReclaim)
         #expect(arena.canReclaimAttributes)
+    }
+
+    /// Lines that scroll off the top of a full scrollback leave the buffer as
+    /// discarded ones do, so the styles they held count toward the wait.
+    /// Here every coloured line scrolls off before ED 3, which then discards
+    /// only plain lines.
+    @Test func scrollingColouredLinesOffAfterAFruitlessReclaimEndsTheWait() {
+        let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 80, rows: 24, scrollback: 1000)
+        terminal.feed(byteArray: colouredCells(0..<styleTableCapacity))
+        // The cells hold every identifier, so this reclaim frees nothing and
+        // the wait starts.
+        terminal.feed(byteArray: colouredCells(styleTableCapacity..<styleTableCapacity + 1))
+        // 1,100 plain lines push every coloured line off the top of the
+        // 1,024 stored lines.
+        terminal.feed(text: "\u{1b}[0m" + String(repeating: "plain\r\n", count: 1100))
+        terminal.feed(text: "\u{1b}[3J\u{1b}[H")
+
+        terminal.feed(byteArray: colouredCells(styleTableCapacity + 1..<styleTableCapacity + 2))
+        #expect(terminal.getCharData(col: 0, row: 0)?.attribute.fg == colour(styleTableCapacity + 1))
     }
 
     /// Within one feed, a selected cell can be overwritten, its identifier

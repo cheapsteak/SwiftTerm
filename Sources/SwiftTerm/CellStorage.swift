@@ -291,10 +291,16 @@ struct StyleIdentifierSet {
         words[Int(identifier &>> 6)] & (1 &<< UInt64(identifier & 63)) != 0
     }
 
-    /// The number of identifiers in the set other than 0, the default
-    /// attribute's, which is never released.
-    var nonDefaultCount: Int {
-        words.reduce(0) { $0 + $1.nonzeroBitCount } - (contains(0) ? 1 : 0)
+    /// Inserts `identifier`, and returns 1 when the set did not hold it and
+    /// it is not 0, the default attribute's, which is never released.
+    /// Returns 0 otherwise.
+    @inline(__always)
+    mutating func insertCountingNew(_ identifier: UInt16) -> Int {
+        let word = Int(identifier &>> 6)
+        let bit: UInt64 = 1 &<< UInt64(identifier & 63)
+        guard identifier != 0, words[word] & bit == 0 else { return 0 }
+        words[word] |= bit
+        return 1
     }
 }
 
@@ -334,9 +340,13 @@ final class CellArena {
     /// For a snapshot copy, how much of the source's reuse list it applied.
     private var appliedAttributeReuseCount = 0
     /// New attributes requested from a full table since the last reclaim,
-    /// plus the credits for discarded cells. It starts above the reclaim
+    /// plus the credits for discarded lines. It starts above the reclaim
     /// interval so the first full table can reclaim at once.
     private var attributeMissesSinceReclaim = Int(UInt16.max)
+    /// The style identifiers credited to the wait since the last reclaim, so
+    /// that each is credited at most once per wait. It exists only while
+    /// something has been credited.
+    private var creditedAttributeIdentifiers: StyleIdentifierSet?
 
     private let graphemeBlocks: UnsafeMutablePointer<UnsafeMutablePointer<[UInt32]?>?>
     private let graphemeCapacity: Int
@@ -561,30 +571,40 @@ final class CellArena {
     /// one may run. A terminal whose cells still hold nearly every identifier
     /// then pays for one scan per this many new styles rather than one per
     /// style, and those styles fall back to the default attribute meanwhile.
-    /// Discarded cells count toward the wait too, through
-    /// ``creditReclaimWait(released:)``.
+    /// Discarded lines count toward the wait too, through
+    /// ``creditReclaimWait(discarding:)``.
     private var attributeReclaimInterval: Int { max(1, attributeCapacity / 16) }
 
     /// True while a full table waits for ``attributeReclaimInterval`` new
-    /// attributes before it reclaims again.
+    /// attributes before it reclaims again. The table-full test comes first,
+    /// so a scroll that checks this before crediting a line costs one
+    /// comparison until the table fills.
     var isWaitingToReclaim: Bool {
-        !isSnapshotCopy &&
-            attributeCountValue > attributeCapacity &&
-            attributeMissesSinceReclaim < attributeReclaimInterval
+        attributeCountValue > attributeCapacity &&
+            attributeMissesSinceReclaim < attributeReclaimInterval &&
+            !isSnapshotCopy
     }
 
-    /// Counts `released` identifiers as that many new attributes toward the
-    /// wait for the next reclaim. Call it when discarding cells that held
-    /// `released` distinct identifiers, the most a reclaim can then free
-    /// because of the discard.
+    /// Credits the wait for the next reclaim with each style identifier that
+    /// `line` holds and no line credited since the last reclaim held, as if
+    /// each were a new attribute. Call it just before `line` is discarded or
+    /// cleared for reuse, whether by a clear, a trim or scrolling. Does
+    /// nothing unless ``isWaitingToReclaim``.
     ///
-    /// Each credit needs a cell in a style of its own that the discard
-    /// removed, so output pays about as much for a credit as for a new style.
-    /// Ending the wait outright on a discard would instead let a loop that
-    /// discards one styled cell for a few bytes, such as leaving the
+    /// A reclaim can free at most those identifiers because of the discard.
+    /// Each credit needs a cell in a style of its own, and an identifier is
+    /// credited once per wait however often copies of its cells are
+    /// discarded, so output pays about as much for a credit as for a new
+    /// style. Ending the wait outright on a discard would instead let a loop
+    /// that discards one styled cell for a few bytes, such as leaving the
     /// alternate screen, scan every line on each pass.
-    func creditReclaimWait(released: Int) {
-        attributeMissesSinceReclaim += max(released, 0)
+    func creditReclaimWait(discarding line: BufferLine) {
+        guard isWaitingToReclaim else { return }
+        if creditedAttributeIdentifiers == nil {
+            creditedAttributeIdentifiers = StyleIdentifierSet()
+        }
+        let added = line.insertNewStyleIdentifiers(into: &creditedAttributeIdentifiers!)
+        attributeMissesSinceReclaim += added
     }
 
     /// True when every identifier has been handed out, none is free, and
@@ -611,6 +631,7 @@ final class CellArena {
     func reclaimAttributes(keeping live: StyleIdentifierSet) -> Int {
         precondition(!isSnapshotCopy, "A snapshot arena cannot reclaim identifiers")
         attributeMissesSinceReclaim = 0
+        creditedAttributeIdentifiers = nil
 
         // A key names an identifier only while that identifier holds the
         // key's attribute, so removing each released identifier's own key
@@ -1168,6 +1189,16 @@ final class CellStoragePage {
         for cell in cells {
             set.insert(cell.styleID)
         }
+    }
+
+    /// Adds the style identifier of every cell to `set`, and returns how many
+    /// identifiers other than the default one it did not hold.
+    func insertNewStyleIdentifiers(into set: inout StyleIdentifierSet) -> Int {
+        var added = 0
+        for cell in cells {
+            added += set.insertCountingNew(cell.styleID)
+        }
+        return added
     }
 
     // Compatibility diagnostics used by storage tests.

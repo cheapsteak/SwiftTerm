@@ -754,15 +754,15 @@ public final class Buffer {
         _lines.insertStyleIdentifiers(into: &set)
     }
 
-    /// Credits the style table's reclaim wait with the distinct identifiers
-    /// that the first `lineCount` lines hold. Call it just before discarding
-    /// those lines. Counting them is one pass over their cells, and it runs
-    /// only while the wait is on.
+    /// Credits the style table's reclaim wait with the identifiers that the
+    /// first `lineCount` lines hold, through
+    /// ``CellArena/creditReclaimWait(discarding:)``. Call it just before
+    /// discarding those lines. Counting them is one pass over their cells,
+    /// and it runs only while the wait is on.
     func creditReclaimWait(discardingFirst lineCount: Int) {
         guard cellArena.isWaitingToReclaim else { return }
-        var held = StyleIdentifierSet()
-        _lines.insertStyleIdentifiers(ofFirst: lineCount, into: &held)
-        cellArena.creditReclaimWait(released: held.nonDefaultCount)
+        let arena = cellArena
+        _lines.forEachLine(ofFirst: lineCount) { arena.creditReclaimWait(discarding: $0) }
     }
     
     /// Makes a blank line that uses `attribute`, outside the buffer.

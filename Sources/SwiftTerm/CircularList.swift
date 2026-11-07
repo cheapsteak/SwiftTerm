@@ -269,11 +269,12 @@ internal class CircularBufferLineList {
         }
     }
 
-    /// Adds the style identifiers of the first `lineCount` lines to `set`.
-    func insertStyleIdentifiers(ofFirst lineCount: Int,
-                                into set: inout StyleIdentifierSet) {
+    /// Calls `body` with each of the first `lineCount` lines.
+    func forEachLine(ofFirst lineCount: Int, _ body: (BufferLine) -> Void) {
         for index in 0..<min(max(lineCount, 0), count) {
-            array[getCyclicIndex(index)]?.insertStyleIdentifiers(into: &set)
+            if let line = array[getCyclicIndex(index)] {
+                body(line)
+            }
         }
     }
 
