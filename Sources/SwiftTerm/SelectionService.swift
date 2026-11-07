@@ -28,7 +28,10 @@ public class SelectionService: CustomDebugStringConvertible {
         let buffer: Buffer
         /// A reclaim can hand a selected cell's style identifier to another
         /// attribute while its raw value stays the same, so a new epoch counts
-        /// as changed content.
+        /// as changed content. Every reclaim that releases an identifier
+        /// starts one, so it clears the selection even when no selected cell
+        /// changed. Reclaims run only once the style table is full, so this
+        /// is rare.
         let attributeEpoch: UInt64
         let rows: [Row]
     }

@@ -485,13 +485,34 @@ struct StyleReclaimRenderTests {
         feed(view, penChanges(0..<styleTableCapacity + 1))
         refresh(snapshot, from: view)
 
-        // C and D come back on their pooled rows, and neither line changed.
+        // A and B come back into view, and none of the four lines changed.
         view.withTerminal { $0.resize(cols: 12, rows: 4) }
         refresh(snapshot, from: view)
         #expect(snapshot.rows.count == 4)
         let current = snapshot.rows.first.map { ObjectIdentifier($0.line.cellArena) }
         let arenas = snapshot.rows.map { ObjectIdentifier($0.line.cellArena) }
         #expect(arenas.allSatisfy { $0 == current })
+    }
+
+    /// Rows that leave the screen in the refresh that replaces the arena
+    /// copy still decode through the old copy, so they are dropped rather
+    /// than pooled, and the old copy is freed.
+    @Test func rowsLeavingTheScreenAfterAReclaimDoNotKeepTheOldArenaCopy() {
+        let view = TerminalView(frame: .zero, font: nil,
+                                options: TerminalOptions(cols: 12, rows: 4, scrollback: 10))
+        let snapshot = TerminalSnapshot()
+        feed(view, Array("A\r\nB\r\nC\r\nD".utf8))
+        refresh(snapshot, from: view)
+        weak var older = snapshot.rows.first?.line.cellArena
+        #expect(older != nil)
+
+        // The last of these reclaims, so the next refresh replaces the arena
+        // copy while two of the four rows leave the screen.
+        feed(view, penChanges(0..<styleTableCapacity + 1))
+        view.withTerminal { $0.resize(cols: 12, rows: 2) }
+        refresh(snapshot, from: view)
+        #expect(snapshot.rows.count == 2)
+        #expect(older == nil)
     }
 
     @Test func packedAttributeCacheFollowsAReclaim() throws {

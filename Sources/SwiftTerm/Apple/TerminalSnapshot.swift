@@ -349,8 +349,9 @@ final class TerminalSnapshot {
         let sourceArena = buffer.cellArena
         // The copy is replaced on the first refresh and after the terminal
         // reclaims style identifiers. A row whose line decodes through an
-        // older copy is copied again below. Pooled rows hold older copies
-        // too, so the pool is dropped rather than kept alive with them.
+        // older copy is copied again below if the frame still shows it, and
+        // dropped rather than pooled if not. The pool is dropped here too, so
+        // no pooled row keeps an older copy alive.
         if cellArenaSnapshot?.synchronizeSnapshotPrefix(from: sourceArena) != true {
             cellArenaSnapshot = sourceArena.snapshotCopy()
             rowPool.removeAll()
@@ -391,7 +392,10 @@ final class TerminalSnapshot {
 
         let visibleCount = max(0, min(buffer.rows, buffer.lines.count - firstRow))
         while rows.count > visibleCount {
-            rowPool.append(rows.removeLast())
+            let row = rows.removeLast()
+            if row.line.cellArena === snapshotArena {
+                rowPool.append(row)
+            }
         }
         while rows.count < visibleCount {
             let source = buffer.lines[firstRow + rows.count]
