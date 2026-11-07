@@ -240,6 +240,29 @@ struct StyleReclaimTests {
         #expect(arena.canReclaimAttributes)
     }
 
+    /// Within one feed, a selected cell can be overwritten, its identifier
+    /// released and reused, and the same character printed with it again.
+    /// The raw cell is then unchanged although its colour is not.
+    @Test func selectionClearsWhenAReclaimRecoloursASelectedCell() throws {
+        let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 80, rows: 24, scrollback: 10)
+        let selection = SelectionService(terminal: terminal)
+        // The selected cell takes identifier 1, then the pen fills the table.
+        terminal.feed(byteArray: colouredCells(0..<1))
+        terminal.feed(byteArray: penChanges(1..<styleTableCapacity))
+        selection.setSelection(start: Position(col: 0, row: 0), end: Position(col: 1, row: 0))
+        let before = try #require(selection.captureSelectedContent())
+
+        // Printing over the cell in the default style releases identifier 1
+        // at the next reclaim, and the new colour takes it.
+        terminal.feed(text: "\u{1b}[H\u{1b}[0mx")
+        terminal.feed(byteArray: penChanges(styleTableCapacity..<styleTableCapacity + 1))
+        terminal.feed(text: "\u{1b}[Hx")
+        #expect(terminal.getCharData(col: 0, row: 0)?.attribute.fg == colour(styleTableCapacity))
+
+        selection.clearIfSelectedContentChanged(from: before)
+        #expect(!selection.active)
+    }
+
     @Test func snapshotCopiesFollowAReclaim() throws {
         let arena = CellArena(styleCapacity: 3)
         let first = try #require(arena.intern(attribute: attribute(1)))

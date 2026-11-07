@@ -26,6 +26,10 @@ public class SelectionService: CustomDebugStringConvertible {
         }
 
         let buffer: Buffer
+        /// A reclaim can hand a selected cell's style identifier to another
+        /// attribute while its raw value stays the same, so a new epoch counts
+        /// as changed content.
+        let attributeEpoch: UInt64
         let rows: [Row]
     }
     
@@ -175,7 +179,9 @@ public class SelectionService: CustomDebugStringConvertible {
         guard let rows = selectedContentRows (in: buffer) else {
             return nil
         }
-        return SelectedContentSnapshot (buffer: buffer, rows: rows)
+        return SelectedContentSnapshot (buffer: buffer,
+                                        attributeEpoch: buffer.cellArena.attributeEpoch,
+                                        rows: rows)
     }
 
     /// Clears the selection when a feed changed its buffer or selected cells.
@@ -186,6 +192,7 @@ public class SelectionService: CustomDebugStringConvertible {
         }
         let buffer = terminal.displayBuffer
         guard buffer === snapshot.buffer,
+              buffer.cellArena.attributeEpoch == snapshot.attributeEpoch,
               selectedContentRows (in: buffer) == snapshot.rows else {
             selectNone ()
             return
