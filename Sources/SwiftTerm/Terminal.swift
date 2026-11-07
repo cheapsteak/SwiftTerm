@@ -1103,6 +1103,14 @@ open class Terminal {
     /// The line is counted  from start of scroll back, not what the terminal has visible right now.
     /// - Parameter row: the row to retrieve, relative to the scroll buffer, not the visible display
     /// - Returns: nil if the col or row are out of bounds, or the BufferLine  otherwise
+    ///
+    /// The returned line is the buffer's own and shares the terminal's style
+    /// table. Its cells keep their colours while it stays in the buffer. Once
+    /// it leaves (scrolled out of the scrollback, cleared, or dropped by a
+    /// reset), a reclaim no longer counts it as a holder, so after the style
+    /// table fills, a style it uses can pass to a different attribute and its
+    /// cells can change colour. Read the cells you need, for example with
+    /// `getData()`, while the line is still in the buffer.
     public func getLine (row: Int) -> BufferLine? {
         if row < 0 || row >= rows {
             return nil
@@ -1115,6 +1123,14 @@ open class Terminal {
     /// The line is counted  from start of scroll back, not what the terminal has visible right now.
     /// - Parameter row: the row to retrieve, relative to the scroll buffer, not the visible display
     /// - Returns: nil if the col or row are out of bounds, or the BufferLine  otherwise
+    ///
+    /// The returned line is the buffer's own and shares the terminal's style
+    /// table. Its cells keep their colours while it stays in the buffer. Once
+    /// it leaves (scrolled out of the scrollback, cleared, or dropped by a
+    /// reset), a reclaim no longer counts it as a holder, so after the style
+    /// table fills, a style it uses can pass to a different attribute and its
+    /// cells can change colour. Read the cells you need, for example with
+    /// `getData()`, while the line is still in the buffer.
     public func getScrollInvariantLine (row: Int) -> BufferLine? {
         if row < buffer.linesTop || row >= buffer.lines.count + buffer.linesTop {
             return nil

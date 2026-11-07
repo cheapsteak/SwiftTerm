@@ -754,6 +754,11 @@ public final class Buffer {
         _lines.insertStyleIdentifiers(into: &set)
     }
     
+    /// Makes a blank line that uses `attribute`, outside the buffer.
+    ///
+    /// The line shares the terminal's style table, but a reclaim counts it as
+    /// a holder only once it is in the buffer. Until then, after the style
+    /// table fills, its style can pass to a different attribute.
     public func getBlankLine (attribute: Attribute, isWrapped: Bool = false) -> BufferLine
     {
         makeBlankLine(cols: cols, packedBlank: getPackedBlankCell(attribute: attribute),

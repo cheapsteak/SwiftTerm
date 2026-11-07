@@ -214,6 +214,13 @@ public final class BufferLine: CustomDebugStringConvertible {
         tailBlankCell = blankTailCell ?? PackedCell()
     }
 
+    /// Makes a copy of `other` that is not part of any buffer.
+    ///
+    /// The copy shares `other`'s style table, but a reclaim counts it as a
+    /// holder only once it is in a buffer. Until then, after the style table
+    /// fills, a style it uses can pass to a different attribute and its cells
+    /// can change colour. Read the cells you need, for example with
+    /// `getData()`, before the terminal is fed more output.
     public init (from other: BufferLine)
     {
         isWrappedValue = other.isWrappedValue
