@@ -45,6 +45,28 @@ private func colouredCells(_ indices: Range<Int>) -> [UInt8] {
 /// cell arena has identifiers, because it reclaims the identifiers nothing
 /// holds any more.
 struct StyleReclaimTests {
+    /// Ways to discard many lines at once.
+    enum Discard: Sendable {
+        /// ED 3, which `clear` sends.
+        case eraseSavedLines
+        case clearScrollback
+        case shrinkHistory
+        case fullReset
+
+        func apply(to terminal: Terminal) {
+            switch self {
+            case .eraseSavedLines:
+                terminal.feed(text: "\u{1b}[3J")
+            case .clearScrollback:
+                terminal.clearScrollback()
+            case .shrinkHistory:
+                terminal.changeHistorySize(10)
+            case .fullReset:
+                terminal.feed(text: "\u{1b}c")
+            }
+        }
+    }
+
     @Test func cellsKeepTheirColourOnceTheStyleTableIsFull() {
         let cols = 80
         let rows = 24
@@ -129,6 +151,20 @@ struct StyleReclaimTests {
         let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 80, rows: 24, scrollback: 10)
         terminal.feed(byteArray: penChanges(0..<styleTableCapacity))
         terminal.feed(text: "\u{1b}c")
+        terminal.feed(byteArray: colouredCells(styleTableCapacity..<styleTableCapacity + 1))
+        #expect(terminal.getCharData(col: 0, row: 0)?.attribute.fg == colour(styleTableCapacity))
+    }
+
+    /// Lines discarded from the scrollback leave the buffer's line slots, so
+    /// the scan no longer counts them as holders.
+    @Test(arguments: [Discard.eraseSavedLines, .clearScrollback])
+    func discardedScrollbackReleasesItsStyles(discard: Discard) {
+        let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 80, rows: 24, scrollback: 1000)
+        // Every identifier goes to a cell, and the scrollback keeps them all.
+        terminal.feed(byteArray: colouredCells(0..<styleTableCapacity))
+        discard.apply(to: terminal)
+
+        terminal.feed(text: "\u{1b}[H")
         terminal.feed(byteArray: colouredCells(styleTableCapacity..<styleTableCapacity + 1))
         #expect(terminal.getCharData(col: 0, row: 0)?.attribute.fg == colour(styleTableCapacity))
     }

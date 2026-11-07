@@ -237,6 +237,12 @@ internal class CircularBufferLineList {
                 for _ in start..<newValue {
                     array.append (nil)
                 }
+            } else if newValue < _count {
+                // Drop the lines the list no longer holds. A line left in a
+                // slot past `count` would keep its style identifiers in use.
+                for index in max (newValue, 0)..<_count {
+                    array [getCyclicIndex(index)] = nil
+                }
             }
             _count = newValue
         }
@@ -251,8 +257,12 @@ internal class CircularBufferLineList {
         startIndex
     }
 
-    /// Adds the style identifiers of every line the list stores to `set`,
-    /// including lines in slots outside `0..<count`.
+    /// Adds the style identifiers of every line the list stores to `set`.
+    ///
+    /// Shrinking the list empties the slots it gives up, so slots outside
+    /// `0..<count` normally hold no line. The scan still walks every slot, so
+    /// it stays correct even if some path leaves a line past the end, and an
+    /// empty slot costs one nil check.
     func insertStyleIdentifiers(into set: inout StyleIdentifierSet) {
         for case let line? in array {
             line.insertStyleIdentifiers(into: &set)
@@ -418,8 +428,15 @@ internal class CircularBufferLineList {
     func trimStart (count: Int)
     {
         let c = count > self.count ? self.count : count
+        guard c > 0 else {
+            return
+        }
+        // Empty the trimmed slots, as shrinking `count` does at the other end.
+        for index in 0..<c {
+            array [getCyclicIndex(index)] = nil
+        }
         startIndex = startIndex + c
-        self.count -= count
+        _count -= c
     }
 
     func shiftElements (start: Int, count: Int, offset: Int) -> Bool
