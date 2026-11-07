@@ -753,6 +753,17 @@ public final class Buffer {
     func insertStyleIdentifiers(into set: inout StyleIdentifierSet) {
         _lines.insertStyleIdentifiers(into: &set)
     }
+
+    /// Credits the style table's reclaim wait with the distinct identifiers
+    /// that the first `lineCount` lines hold. Call it just before discarding
+    /// those lines. Counting them is one pass over their cells, and it runs
+    /// only while the wait is on.
+    func creditReclaimWait(discardingFirst lineCount: Int) {
+        guard cellArena.isWaitingToReclaim else { return }
+        var held = StyleIdentifierSet()
+        _lines.insertStyleIdentifiers(ofFirst: lineCount, into: &held)
+        cellArena.creditReclaimWait(released: held.nonDefaultCount)
+    }
     
     /// Makes a blank line that uses `attribute`, outside the buffer.
     ///
@@ -828,9 +839,11 @@ public final class Buffer {
         x = 0
         y = 0
 
+        // Every exit from the alternate screen clears it. Entering that screen
+        // already builds as many blank cells as the count walks.
+        creditReclaimWait(discardingFirst: _lines.count)
         _lines = CircularBufferLineList (maxLength: getCorrectBufferLength(rows))
         setupLinesCallbacks()
-        cellArena.allowReclaimAtNextMiss()
         _linesWithImagesCount = 0
         scrollTop = 0
         scrollBottom = rows - 1
@@ -1027,8 +1040,8 @@ public final class Buffer {
             return
         }
         let amountToTrim = yBase
+        creditReclaimWait(discardingFirst: amountToTrim)
         lines.trimStart (count: amountToTrim)
-        cellArena.allowReclaimAtNextMiss()
         yBase = 0
         yDisp = 0
         savedY = max (savedY - amountToTrim, 0)
@@ -1050,8 +1063,8 @@ public final class Buffer {
                 // Decrease buffer size - need to trim and adjust
                 let amountToTrim = lines.count - newMaxLength
                 if amountToTrim > 0 {
+                    creditReclaimWait(discardingFirst: amountToTrim)
                     lines.trimStart(count: amountToTrim)
-                    cellArena.allowReclaimAtNextMiss()
                     yBase = max(yBase - amountToTrim, 0)
                     yDisp = max(yDisp - amountToTrim, 0)
                     savedY = max(savedY - amountToTrim, 0)

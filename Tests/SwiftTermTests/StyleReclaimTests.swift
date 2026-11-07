@@ -67,6 +67,30 @@ struct StyleReclaimTests {
         }
     }
 
+    /// Discards that output can repeat for a few bytes a time, and that keep
+    /// the alternate screen's cells.
+    enum RepeatedDiscard: Sendable {
+        /// Scrolls the top line into the scrollback, then erases it with ED 3.
+        case eraseSavedLines
+        /// RIS, which replaces the normal buffer and keeps the alternate one.
+        case fullReset
+
+        /// Prints one cell in the foreground `index`, then discards it.
+        func cycle(_ index: Int, rows: Int) -> [UInt8] {
+            var bytes: [UInt8] = []
+            switch self {
+            case .eraseSavedLines:
+                bytes.append(contentsOf: "\u{1b}[H".utf8)
+                appendForeground(index, to: &bytes)
+                bytes.append(contentsOf: "x\u{1b}[0m\u{1b}[\(rows)H\n\u{1b}[3J".utf8)
+            case .fullReset:
+                appendForeground(index, to: &bytes)
+                bytes.append(contentsOf: "x\u{1b}c".utf8)
+            }
+            return bytes
+        }
+    }
+
     @Test func cellsKeepTheirColourOnceTheStyleTableIsFull() {
         let cols = 80
         let rows = 24
@@ -157,8 +181,9 @@ struct StyleReclaimTests {
         // The cells hold every identifier except the erase style's, so the
         // reclaim the last of these starts releases only that one.
         terminal.feed(byteArray: colouredCells(0..<styleTableCapacity - 1))
-        // ED 3 frees the scrollback and lets the next intern that finds the
-        // table full reclaim at once. The pen itself is still interned.
+        // ED 3 frees the scrollback, which held more identifiers than the
+        // reclaim wait has left, so the next intern that finds the table
+        // full reclaims at once. The pen itself is still interned.
         terminal.feed(text: "\u{1b}[3J")
 
         terminal.feed(text: "\u{1b}[0;31;44m\u{1b}[H\u{1b}[K")
@@ -190,8 +215,10 @@ struct StyleReclaimTests {
         #expect(terminal.getCharData(col: 0, row: 0)?.attribute.fg == colour(styleTableCapacity))
     }
 
-    /// A reclaim that frees nothing makes the next one wait, but discarding
-    /// many lines ends that wait, so the next new style reclaims at once.
+    /// A reclaim that frees nothing makes the next one wait. Discarded lines
+    /// count each distinct identifier they held toward the wait, so
+    /// discarding a scrollback that holds nearly every one ends it, and the
+    /// next new style reclaims at once.
     @Test(arguments: [Discard.eraseSavedLines, .clearScrollback, .shrinkHistory, .fullReset])
     func discardingLinesAfterAFruitlessReclaimReclaimsAtOnce(discard: Discard) {
         let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 80, rows: 24, scrollback: 1000)
@@ -206,9 +233,12 @@ struct StyleReclaimTests {
         #expect(terminal.getCharData(col: 0, row: 0)?.attribute.fg == colour(styleTableCapacity + 1))
     }
 
-    @Test func leavingTheAlternateScreenAfterAFruitlessReclaimReclaimsAtOnce() {
-        let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 80, rows: 24, scrollback: 1000)
-        let onAlternateScreen = 1000
+    /// Leaving the alternate screen counts each distinct identifier it held
+    /// as one new style toward the wait, so leaving one that held more than
+    /// the wait's 4,095 lets the next new style reclaim at once.
+    @Test func leavingAnAlternateScreenThatHeldManyStylesReclaimsAtOnce() {
+        let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 200, rows: 50, scrollback: 1000)
+        let onAlternateScreen = 5000
         terminal.feed(byteArray: colouredCells(0..<styleTableCapacity - onAlternateScreen))
         // From the top, so the alternate screen keeps all its cells.
         terminal.feed(text: "\u{1b}[?1049h\u{1b}[H")
@@ -223,7 +253,61 @@ struct StyleReclaimTests {
         #expect(terminal.getCharData(col: 0, row: 0)?.attribute.fg == colour(styleTableCapacity + 1))
     }
 
-    @Test func discardingCellsEndsTheWaitAfterAFruitlessReclaim() throws {
+    /// Output can enter the alternate screen, print one cell in a new colour
+    /// and leave, over and over, for a few bytes each time. Each exit frees at
+    /// most that one identifier, so it must not let the next new style scan
+    /// both buffers.
+    @Test func leavingAnAlternateScreenThatHeldOneStyleDoesNotScanOnEveryExit() {
+        let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 80, rows: 24, scrollback: 1000)
+        // The scrollback holds every identifier but the last, which only the
+        // pen held before the reset to the default style.
+        terminal.feed(byteArray: colouredCells(0..<styleTableCapacity - 1))
+        terminal.feed(byteArray: penChanges(styleTableCapacity - 1..<styleTableCapacity))
+        terminal.feed(text: "\u{1b}[0m")
+
+        // The first new colour reclaims that identifier and starts an epoch.
+        // Each cycle resets the pen, so only its cell holds the identifier.
+        // If an exit ended the wait, every exit after it would let the next
+        // colour reclaim it again and start another.
+        var bytes: [UInt8] = []
+        for cycle in 0..<100 {
+            bytes.append(contentsOf: "\u{1b}[?1049h".utf8)
+            appendForeground(styleTableCapacity + cycle, to: &bytes)
+            bytes.append(contentsOf: "x\u{1b}[0m\u{1b}[?1049l".utf8)
+        }
+        terminal.feed(byteArray: bytes)
+        #expect(terminal.buffer.cellArena.attributeEpoch == 1)
+    }
+
+    /// ED 3 on the normal screen and RIS both keep the alternate screen's
+    /// cells, so output can fill that screen with styles once, then discard
+    /// one cell in a new colour at a time, for a few bytes each. Each discard
+    /// frees at most that one identifier, so it must not let the next new
+    /// style scan both buffers.
+    @Test(arguments: [RepeatedDiscard.eraseSavedLines, .fullReset])
+    func discardsThatFreeOneStyleDoNotScanEveryTime(discard: RepeatedDiscard) {
+        let rows = 220
+        let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 300, rows: rows,
+                                                             scrollback: 10)
+        // Mode 47 leaves the alternate screen without clearing it. Its 66,000
+        // cells hold every identifier but the last.
+        terminal.feed(text: "\u{1b}[?47h\u{1b}[H")
+        terminal.feed(byteArray: colouredCells(0..<styleTableCapacity - 1))
+        terminal.feed(text: "\u{1b}[0m\u{1b}[?47l")
+        #expect(!terminal.isCurrentBufferAlternate)
+
+        // The first cycle takes the last identifier, and the second reclaims
+        // it and starts an epoch. If a discard ended the wait, every cycle
+        // after that would reclaim it again and start another.
+        var bytes: [UInt8] = []
+        for cycle in 0..<100 {
+            bytes.append(contentsOf: discard.cycle(styleTableCapacity - 1 + cycle, rows: rows))
+        }
+        terminal.feed(byteArray: bytes)
+        #expect(terminal.buffer.cellArena.attributeEpoch == 1)
+    }
+
+    @Test func discardedIdentifiersCountTowardTheWaitAfterAFruitlessReclaim() throws {
         let arena = CellArena(styleCapacity: 64)
         var live = StyleIdentifierSet()
         for index in 1...64 {
@@ -232,11 +316,17 @@ struct StyleReclaimTests {
         }
         #expect(arena.intern(attribute: attribute(65)) == nil)
         #expect(arena.reclaimAttributes(keeping: live) == 0)
+        #expect(arena.isWaitingToReclaim)
+
+        // With 64 identifiers the wait is 4 new attributes. One arrives, and
+        // a discard of cells that held two identifiers counts as two more.
         #expect(arena.intern(attribute: attribute(66)) == nil)
+        arena.creditReclaimWait(released: 2)
+        #expect(arena.isWaitingToReclaim)
         #expect(!arena.canReclaimAttributes)
 
-        arena.allowReclaimAtNextMiss()
-        #expect(arena.intern(attribute: attribute(67)) == nil)
+        arena.creditReclaimWait(released: 1)
+        #expect(!arena.isWaitingToReclaim)
         #expect(arena.canReclaimAttributes)
     }
 

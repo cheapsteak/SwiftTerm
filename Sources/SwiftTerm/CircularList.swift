@@ -269,6 +269,14 @@ internal class CircularBufferLineList {
         }
     }
 
+    /// Adds the style identifiers of the first `lineCount` lines to `set`.
+    func insertStyleIdentifiers(ofFirst lineCount: Int,
+                                into set: inout StyleIdentifierSet) {
+        for index in 0..<min(max(lineCount, 0), count) {
+            array[getCyclicIndex(index)]?.insertStyleIdentifiers(into: &set)
+        }
+    }
+
     private var _count: Int
     var maxLength: Int {
         didSet {

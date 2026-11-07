@@ -290,6 +290,12 @@ struct StyleIdentifierSet {
     func contains(_ identifier: UInt16) -> Bool {
         words[Int(identifier &>> 6)] & (1 &<< UInt64(identifier & 63)) != 0
     }
+
+    /// The number of identifiers in the set other than 0, the default
+    /// attribute's, which is never released.
+    var nonDefaultCount: Int {
+        words.reduce(0) { $0 + $1.nonzeroBitCount } - (contains(0) ? 1 : 0)
+    }
 }
 
 /// Stable lookup data shared by packed cells in one terminal.
@@ -327,9 +333,9 @@ final class CellArena {
     private var reusedAttributeIdentifiers: [UInt16] = []
     /// For a snapshot copy, how much of the source's reuse list it applied.
     private var appliedAttributeReuseCount = 0
-    /// New attributes requested from a full table since the last reclaim.
-    /// It starts above the reclaim interval so the first full table can
-    /// reclaim at once.
+    /// New attributes requested from a full table since the last reclaim,
+    /// plus the credits for discarded cells. It starts above the reclaim
+    /// interval so the first full table can reclaim at once.
     private var attributeMissesSinceReclaim = Int(UInt16.max)
 
     private let graphemeBlocks: UnsafeMutablePointer<UnsafeMutablePointer<[UInt32]?>?>
@@ -555,15 +561,30 @@ final class CellArena {
     /// one may run. A terminal whose cells still hold nearly every identifier
     /// then pays for one scan per this many new styles rather than one per
     /// style, and those styles fall back to the default attribute meanwhile.
+    /// Discarded cells count toward the wait too, through
+    /// ``creditReclaimWait(released:)``.
     private var attributeReclaimInterval: Int { max(1, attributeCapacity / 16) }
 
-    /// Lets the next new attribute that finds the table full reclaim at once,
-    /// without waiting for ``attributeReclaimInterval`` more of them. Call it
-    /// after discarding many cells at once, since the identifiers they held
-    /// may now be free.
-    func allowReclaimAtNextMiss() {
-        attributeMissesSinceReclaim = max(attributeMissesSinceReclaim,
-                                          attributeReclaimInterval)
+    /// True while a full table waits for ``attributeReclaimInterval`` new
+    /// attributes before it reclaims again.
+    var isWaitingToReclaim: Bool {
+        !isSnapshotCopy &&
+            attributeCountValue > attributeCapacity &&
+            attributeMissesSinceReclaim < attributeReclaimInterval
+    }
+
+    /// Counts `released` identifiers as that many new attributes toward the
+    /// wait for the next reclaim. Call it when discarding cells that held
+    /// `released` distinct identifiers, the most a reclaim can then free
+    /// because of the discard.
+    ///
+    /// Each credit needs a cell in a style of its own that the discard
+    /// removed, so output pays about as much for a credit as for a new style.
+    /// Ending the wait outright on a discard would instead let a loop that
+    /// discards one styled cell for a few bytes, such as leaving the
+    /// alternate screen, scan every line on each pass.
+    func creditReclaimWait(released: Int) {
+        attributeMissesSinceReclaim += max(released, 0)
     }
 
     /// True when every identifier has been handed out, none is free, and
