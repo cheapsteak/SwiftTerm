@@ -514,14 +514,14 @@ struct StyleReclaimTests {
             live.insert(identifier)
         }
         // With 64 identifiers the first wait is 4 new attributes. Each
-        // reclaim in a row that frees nothing doubles the next wait, up to 16
+        // reclaim in a row that frees nothing doubles the next wait, up to 8
         // times the first.
         var waits: [Int] = []
         for _ in 0..<6 {
             #expect(arena.reclaimAttributes(keeping: live) == 0)
             waits.append(arena.attributeReclaimInterval)
         }
-        #expect(waits == [4, 8, 16, 32, 64, 64])
+        #expect(waits == [4, 8, 16, 32, 32, 32])
 
         // A reclaim that frees enough starts again at the first wait.
         #expect(arena.reclaimAttributes(keeping: StyleIdentifierSet()) == 64)
@@ -566,6 +566,30 @@ struct StyleReclaimTests {
         // reclaim. It also frees one identifier, so the wait doubles to
         // 8,190, which those styles, credited once per wait, cannot reach.
         #expect(terminal.buffer.cellArena.attributeEpoch == 2)
+    }
+
+    /// The wait stops growing at 8 times its base, 32,760 new styles, about
+    /// half the table. So after a long run of reclaims that free nothing, ED 3
+    /// still ends the wait by discarding a scrollback that held most of the
+    /// identifiers, although the rows it keeps hold 1,855 more.
+    @Test func discardingMostStylesEndsTheWaitAfterALongRunOfFruitlessReclaims() {
+        let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 80, rows: 24, scrollback: 1000)
+        // The cells hold every identifier, so every reclaim below frees nothing.
+        terminal.feed(byteArray: colouredCells(0..<styleTableCapacity))
+        // The first new colour reclaims at once, and the waits after it,
+        // 4,095, 8,190, 16,380 and 32,760 new colours, bring four more. That
+        // makes five in a row that free nothing, enough to reach the longest
+        // wait, which then has 100 new colours toward it.
+        let baseWait = styleTableCapacity / 16
+        let fruitlessRun = 1 + 15 * baseWait + 100
+        terminal.feed(byteArray: penChanges(styleTableCapacity..<styleTableCapacity + fruitlessRun))
+
+        // ED 3 discards 796 lines that hold 63,680 identifiers, and the 24
+        // rows it keeps hold the other 1,855.
+        terminal.feed(text: "\u{1b}[3J\u{1b}[H")
+        let next = styleTableCapacity + fruitlessRun
+        terminal.feed(byteArray: colouredCells(next..<next + 1))
+        #expect(terminal.getCharData(col: 0, row: 0)?.attribute.fg == colour(next))
     }
 
     @Test func aReclaimThatReleasesNothingWaitsBeforeTheNextScan() throws {

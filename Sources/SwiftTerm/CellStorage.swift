@@ -583,9 +583,16 @@ final class CellArena {
     /// Credits can still come cheaply, since DECCRA copies styled cells for a
     /// few bytes and the copies keep the identifiers in use when the
     /// originals are discarded. So each reclaim in a row after the first that
-    /// releases almost nothing doubles the wait, up to 16 times the base,
-    /// which is about the size of the table. A reclaim that releases enough
-    /// starts again at the base.
+    /// releases almost nothing doubles the wait, up to 8 times the base,
+    /// about half the table. A reclaim that releases enough starts again at
+    /// the base.
+    ///
+    /// The cap keeps a large discard able to end any wait. One that credits
+    /// half the table ends it however many identifiers other lines still
+    /// hold. A wait as long as the table could end only when the rest of the
+    /// terminal held almost none, so after a long run of fruitless reclaims,
+    /// new styles would fall back to the default attribute although a
+    /// discard had freed most identifiers.
     var attributeReclaimInterval: Int {
         baseReclaimInterval << max(nearlyFruitlessReclaims - 1, 0)
     }
@@ -668,7 +675,7 @@ final class CellArena {
         // before the next one can run, which pays for its scan as 255 misses
         // would. One that releases fewer lengthens the next wait.
         if released.count < max(1, baseReclaimInterval / 16) {
-            nearlyFruitlessReclaims = min(nearlyFruitlessReclaims + 1, 5)
+            nearlyFruitlessReclaims = min(nearlyFruitlessReclaims + 1, 4)
         } else {
             nearlyFruitlessReclaims = 0
         }
