@@ -35,6 +35,8 @@ final class TabStopsAtCreationWidthTests {
     @Test func fullResetLeavesStopsPastColumn80OnBothScreens() {
         let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 120, rows: 24)
 
+        // A control: RIS builds a new normal buffer at the full width, which
+        // lays its stops whether or not creation did.
         terminal.feed(text: "\u{1b}c\u{1b}[1;89H\t")
         #expect(terminal.buffer.x == 96)
 
@@ -66,6 +68,8 @@ final class TabStopsAtCreationWidthTests {
         terminal.feed(text: "\u{1b}[1;89H\t")
         #expect(terminal.buffer.x == 96)
 
+        // Controls: `resize(cols:rows:)` lays stops from the last stop below
+        // the old width, so it fills the gap even where creation left one.
         terminal.resize(cols: 200, rows: 24)
         terminal.feed(text: "\u{1b}[1;153H\t")
         #expect(terminal.buffer.x == 160)
