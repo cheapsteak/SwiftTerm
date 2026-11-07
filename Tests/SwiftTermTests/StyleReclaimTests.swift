@@ -145,6 +145,27 @@ struct StyleReclaimTests {
                 Attribute(fg: .defaultColor, bg: background, style: .none))
     }
 
+    /// A reclaim can release a pen's background-only erase style while a cell
+    /// keeps the pen. Selecting that pen again interns the erase style again,
+    /// and that intern reclaims as the pen's own does.
+    @Test func erasingWithAReselectedPenKeepsItsBackground() {
+        let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 80, rows: 24, scrollback: 1000)
+        let blue = Attribute.Color.ansi256(code: 4)
+        // The pen takes identifier 1 and its erase style 2. Only the printed
+        // cell holds either of them.
+        terminal.feed(text: "\u{1b}[31;44mA\u{1b}[0m")
+        // The cells hold every identifier except the erase style's, so the
+        // reclaim the last of these starts releases only that one.
+        terminal.feed(byteArray: colouredCells(0..<styleTableCapacity - 1))
+        // ED 3 frees the scrollback and lets the next intern that finds the
+        // table full reclaim at once. The pen itself is still interned.
+        terminal.feed(text: "\u{1b}[3J")
+
+        terminal.feed(text: "\u{1b}[0;31;44m\u{1b}[H\u{1b}[K")
+        #expect(terminal.getCharData(col: 0, row: 0)?.attribute.bg == blue)
+        #expect(terminal.getCharData(col: 79, row: 0)?.attribute.bg == blue)
+    }
+
     /// RIS replaces the normal buffer but keeps the arena, so the table stays
     /// full, and the next new style reclaims what the old buffer held.
     @Test func newColourAfterAFullResetOfAFullTable() {

@@ -708,10 +708,7 @@ open class Terminal {
     private func setCurrentAttribute(_ attribute: Attribute) {
         guard attribute != curAttr else { return }
 
-        var styleID = cellArena.intern(attribute: attribute)
-        if styleID == nil && reclaimStyleIdentifiers() {
-            styleID = cellArena.intern(attribute: attribute)
-        }
+        let styleID = internReclaiming(attribute)
         let effectiveAttribute = styleID == nil ? CharData.defaultAttr : attribute
         let effectiveStyleID = styleID ?? 0
         let backgroundChanged = effectiveAttribute.bg != curAttr.bg
@@ -725,8 +722,11 @@ open class Terminal {
         let eraseAttribute = Attribute(fg: CharData.defaultAttr.fg,
                                        bg: effectiveAttribute.bg,
                                        style: CharData.defaultAttr.style)
+        // A reclaim can release the erase style while keeping the pen, so
+        // re-selecting the pen can miss here. `curStyleID` already names the
+        // new pen, which keeps it through a reclaim this intern starts.
         let eraseStyleID = eraseAttribute == effectiveAttribute
-            ? effectiveStyleID : (cellArena.intern(attribute: eraseAttribute) ?? 0)
+            ? effectiveStyleID : (internReclaiming(eraseAttribute) ?? 0)
         guard let eraseBlank = cellArena.pack(styleID: eraseStyleID, scalar: 0,
                                               widthState: .narrow),
               let eraseSpace = cellArena.pack(styleID: eraseStyleID, scalar: 32,
@@ -736,6 +736,21 @@ open class Terminal {
         currentEraseAttribute = eraseAttribute
         currentEraseBlankCell = eraseBlank
         currentEraseSpaceCell = eraseSpace
+    }
+
+    /// Interns `attribute`, and when the style table is full, reclaims unused
+    /// identifiers and tries again.
+    ///
+    /// A reclaim keeps only the holders ``reclaimStyleIdentifiers()`` names,
+    /// so the caller must not hold an identifier anywhere else when it calls
+    /// this, such as a cell it has not yet stored in a line.
+    @inline(__always)
+    private func internReclaiming(_ attribute: Attribute) -> UInt16? {
+        if let styleID = cellArena.intern(attribute: attribute) {
+            return styleID
+        }
+        guard reclaimStyleIdentifiers() else { return nil }
+        return cellArena.intern(attribute: attribute)
     }
 
     /// Releases the style identifiers that nothing in this terminal still
@@ -1944,7 +1959,7 @@ open class Terminal {
     private func makePackedCell(attribute: Attribute, scalar: UnicodeScalar,
                                 width: Int8) -> PackedCell
     {
-        let styleID = cellArena.intern(attribute: attribute) ?? 0
+        let styleID = internReclaiming(attribute) ?? 0
         return makePackedCell(styleID: styleID, scalar: scalar, width: width)
     }
 
@@ -1952,8 +1967,14 @@ open class Terminal {
     private func makePackedCell(attribute: Attribute, character: Character,
                                 width: Int8) -> PackedCell
     {
-        let styleID = cellArena.intern(attribute: attribute) ?? 0
+        let styleID = internReclaiming(attribute) ?? 0
         return makePackedCell(styleID: styleID, character: character, width: width)
+    }
+
+    /// The blank cell that inserted columns take, as `Buffer.getPackedNullCell()`
+    /// makes it, with its style interned through a reclaim.
+    private func makePackedNullCell() -> PackedCell {
+        makePackedCell(attribute: Attribute.empty, scalar: " ", width: 1)
     }
 
     public func makeCharData (attribute: Attribute, char: Character, size: Int8 = 1) -> CharData
@@ -4095,7 +4116,7 @@ open class Terminal {
                 line.insertPackedCells(
                     pos: buffer.x, n: n,
                     rightMargin: marginMode ? buffer.marginRight : cols - 1,
-                    fill: buffer.getPackedNullCell())
+                    fill: makePackedNullCell())
                 line.isWrapped = false
             }
             return
@@ -6917,7 +6938,7 @@ open class Terminal {
                 line.insertPackedCells(
                     pos: at, n: 1,
                     rightMargin: marginMode ? buffer.marginRight : cols - 1,
-                    fill: buffer.getPackedNullCell())
+                    fill: makePackedNullCell())
             } else {
                 line.deletePackedCells(
                     pos: at, n: 1,
