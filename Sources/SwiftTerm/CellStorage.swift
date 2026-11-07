@@ -591,17 +591,19 @@ final class CellArena {
         precondition(!isSnapshotCopy, "A snapshot arena cannot reclaim identifiers")
         attributeMissesSinceReclaim = 0
 
-        // Rebuild the reverse lookup from the kept entries, so no key can
-        // name an identifier that is about to name a different attribute.
-        attributeIdentifiers.removeAll(keepingCapacity: true)
-        attributeIdentifiers[InternedAttributeKey(attributes[0])] = 0
+        // A key names an identifier only while that identifier holds the
+        // key's attribute, so removing each released identifier's own key
+        // leaves no key naming an identifier that is about to name a
+        // different attribute. Kept keys stay as they are.
         var released: [UInt16] = []
         for raw in stride(from: attributeCountValue - 1, to: 0, by: -1) {
             let identifier = UInt16(raw)
-            if live.contains(identifier) {
-                attributeIdentifiers[InternedAttributeKey(attributes[raw])] = identifier
-            } else {
-                released.append(identifier)
+            guard !live.contains(identifier) else { continue }
+            released.append(identifier)
+            let key = InternedAttributeKey(attributes[raw])
+            if let index = attributeIdentifiers.index(forKey: key),
+               attributeIdentifiers.values[index] == identifier {
+                attributeIdentifiers.remove(at: index)
             }
         }
         // Descending order puts the lowest identifier last, where
