@@ -747,7 +747,29 @@ public final class Buffer {
     func getPackedBlankCell(attribute: Attribute) -> PackedCell {
         cellArena.pack(attribute: attribute, scalar: 0, widthState: .narrow)!
     }
+
+    /// Adds every style identifier this buffer's lines hold, scrollback
+    /// included, to `set`.
+    func insertStyleIdentifiers(into set: inout StyleIdentifierSet) {
+        _lines.insertStyleIdentifiers(into: &set)
+    }
+
+    /// Credits the style table's reclaim wait with the identifiers that the
+    /// first `lineCount` lines hold, through
+    /// ``CellArena/creditReclaimWait(discarding:)``. Call it just before
+    /// discarding those lines. Counting them is one pass over their cells,
+    /// and it runs only while the wait is on.
+    func creditReclaimWait(discardingFirst lineCount: Int) {
+        guard cellArena.isWaitingToReclaim else { return }
+        let arena = cellArena
+        _lines.forEachLine(ofFirst: lineCount) { arena.creditReclaimWait(discarding: $0) }
+    }
     
+    /// Makes a blank line that uses `attribute`, outside the buffer.
+    ///
+    /// The line shares the terminal's style table, but a reclaim counts it as
+    /// a holder only once it is in the buffer. Until then, after the style
+    /// table fills, its style can pass to a different attribute.
     public func getBlankLine (attribute: Attribute, isWrapped: Bool = false) -> BufferLine
     {
         makeBlankLine(cols: cols, packedBlank: getPackedBlankCell(attribute: attribute),
@@ -817,6 +839,10 @@ public final class Buffer {
         x = 0
         y = 0
 
+        // Leaving the alternate screen through mode 1047 or 1049 clears it,
+        // though leaving through mode 47 does not. The next entry builds as
+        // many blank cells as the count walks.
+        creditReclaimWait(discardingFirst: _lines.count)
         _lines = CircularBufferLineList (maxLength: getCorrectBufferLength(rows))
         setupLinesCallbacks()
         _linesWithImagesCount = 0
@@ -1015,6 +1041,7 @@ public final class Buffer {
             return
         }
         let amountToTrim = yBase
+        creditReclaimWait(discardingFirst: amountToTrim)
         lines.trimStart (count: amountToTrim)
         yBase = 0
         yDisp = 0
@@ -1037,6 +1064,7 @@ public final class Buffer {
                 // Decrease buffer size - need to trim and adjust
                 let amountToTrim = lines.count - newMaxLength
                 if amountToTrim > 0 {
+                    creditReclaimWait(discardingFirst: amountToTrim)
                     lines.trimStart(count: amountToTrim)
                     yBase = max(yBase - amountToTrim, 0)
                     yDisp = max(yDisp - amountToTrim, 0)
@@ -1134,6 +1162,17 @@ public final class Buffer {
         }
     }
     
+    /// Sets the default tab stops in the columns from `oldCols` on, which a
+    /// wider `resize(newCols:newRows:)` adds without stops. The old columns
+    /// keep their stops as they are, set or cleared.
+    func setupTabStops(newColumnsFrom oldCols: Int, tabStopWidth: Int)
+    {
+        let firstStop = (max(oldCols, 0) + tabStopWidth - 1) / tabStopWidth * tabStopWidth
+        for column in stride(from: firstStop, to: min(cols, tabStops.count), by: tabStopWidth) {
+            tabStops [column] = true
+        }
+    }
+
     func tabSet (pos : Int)
     {
         if pos < tabStops.count {

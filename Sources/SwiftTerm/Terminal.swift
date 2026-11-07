@@ -708,7 +708,7 @@ open class Terminal {
     private func setCurrentAttribute(_ attribute: Attribute) {
         guard attribute != curAttr else { return }
 
-        let styleID = cellArena.intern(attribute: attribute)
+        let styleID = internReclaiming(attribute)
         let effectiveAttribute = styleID == nil ? CharData.defaultAttr : attribute
         let effectiveStyleID = styleID ?? 0
         let backgroundChanged = effectiveAttribute.bg != curAttr.bg
@@ -722,8 +722,11 @@ open class Terminal {
         let eraseAttribute = Attribute(fg: CharData.defaultAttr.fg,
                                        bg: effectiveAttribute.bg,
                                        style: CharData.defaultAttr.style)
+        // A reclaim can release the erase style while keeping the pen, so
+        // re-selecting the pen can miss here. `curStyleID` already names the
+        // new pen, which keeps it through a reclaim this intern starts.
         let eraseStyleID = eraseAttribute == effectiveAttribute
-            ? effectiveStyleID : (cellArena.intern(attribute: eraseAttribute) ?? 0)
+            ? effectiveStyleID : (internReclaiming(eraseAttribute) ?? 0)
         guard let eraseBlank = cellArena.pack(styleID: eraseStyleID, scalar: 0,
                                               widthState: .narrow),
               let eraseSpace = cellArena.pack(styleID: eraseStyleID, scalar: 32,
@@ -733,6 +736,54 @@ open class Terminal {
         currentEraseAttribute = eraseAttribute
         currentEraseBlankCell = eraseBlank
         currentEraseSpaceCell = eraseSpace
+    }
+
+    /// Interns `attribute`, and when the style table is full, reclaims unused
+    /// identifiers and tries again.
+    ///
+    /// A reclaim keeps only the holders ``reclaimStyleIdentifiers()`` names,
+    /// so the caller must not hold an identifier anywhere else when it calls
+    /// this, such as a cell it has not yet stored in a line.
+    @inline(__always)
+    private func internReclaiming(_ attribute: Attribute) -> UInt16? {
+        if let styleID = cellArena.intern(attribute: attribute) {
+            return styleID
+        }
+        guard reclaimStyleIdentifiers() else { return nil }
+        return cellArena.intern(attribute: attribute)
+    }
+
+    /// Releases the style identifiers that nothing in this terminal still
+    /// uses, so a new style can have one. It runs only when the cell arena has
+    /// handed out every identifier, so the print and intern paths never pay
+    /// for it.
+    ///
+    /// The holders are the cells of both screens, scrollback included, the
+    /// displayed buffer when it is neither, the current pen and the cached
+    /// erase cells. Saved cursors keep their attribute by value and intern it
+    /// again on restore, so they hold no identifier.
+    ///
+    /// Reclaim cannot help when the cells still use every identifier, as when
+    /// scrollback alone holds 65,535 distinct styles. Nothing is released
+    /// then, and the new style falls back to the default attribute.
+    ///
+    /// - Returns: true when an identifier was released.
+    private func reclaimStyleIdentifiers() -> Bool {
+        guard cellArena.canReclaimAttributes else { return false }
+        var live = StyleIdentifierSet()
+        live.insert(curStyleID)
+        live.insert(currentEraseBlankCell.styleID)
+        live.insert(currentEraseSpaceCell.styleID)
+        normalBuffer.insertStyleIdentifiers(into: &live)
+        altBuffer.insertStyleIdentifiers(into: &live)
+        // `resetNormalBuffer()` replaces the normal buffer but leaves the
+        // displayed one alone. A full reset switches to the new buffer at
+        // once, but a host that calls it directly keeps showing, and
+        // printing to, the old one until the next screen switch.
+        if buffer !== normalBuffer && buffer !== altBuffer {
+            buffer.insertStyleIdentifiers(into: &live)
+        }
+        return cellArena.reclaimAttributes(keeping: live) > 0
     }
     // The requested conformance from DECSCL command
     enum TerminalConformance: Sendable {
@@ -997,8 +1048,8 @@ open class Terminal {
         normalBuffer.terminal = self
         altBuffer.terminal = self
 
-        setupTabStops()
-
+        // The buffers above are built at the default width. `setup()` grows
+        // them to `options.cols` and lays tab stops across the new columns.
         setup()
     }
 
@@ -1055,6 +1106,14 @@ open class Terminal {
     /// The line is counted  from start of scroll back, not what the terminal has visible right now.
     /// - Parameter row: the row to retrieve, relative to the scroll buffer, not the visible display
     /// - Returns: nil if the col or row are out of bounds, or the BufferLine  otherwise
+    ///
+    /// The returned line is the buffer's own and shares the terminal's style
+    /// table. Its cells keep their colours while it stays in the buffer. Once
+    /// it leaves (scrolled out of the scrollback, cleared, or dropped by a
+    /// reset), a reclaim no longer counts it as a holder, so after the style
+    /// table fills, a style it uses can pass to a different attribute and its
+    /// cells can change colour. Read the cells you need, for example with
+    /// `getData()`, while the line is still in the buffer.
     public func getLine (row: Int) -> BufferLine? {
         if row < 0 || row >= rows {
             return nil
@@ -1067,6 +1126,14 @@ open class Terminal {
     /// The line is counted  from start of scroll back, not what the terminal has visible right now.
     /// - Parameter row: the row to retrieve, relative to the scroll buffer, not the visible display
     /// - Returns: nil if the col or row are out of bounds, or the BufferLine  otherwise
+    ///
+    /// The returned line is the buffer's own and shares the terminal's style
+    /// table. Its cells keep their colours while it stays in the buffer. Once
+    /// it leaves (scrolled out of the scrollback, cleared, or dropped by a
+    /// reset), a reclaim no longer counts it as a holder, so after the style
+    /// table fills, a style it uses can pass to a different attribute and its
+    /// cells can change colour. Read the cells you need, for example with
+    /// `getData()`, while the line is still in the buffer.
     public func getScrollInvariantLine (row: Int) -> BufferLine? {
         if row < buffer.linesTop || row >= buffer.lines.count + buffer.linesTop {
             return nil
@@ -1088,6 +1155,12 @@ open class Terminal {
     }
     
     public func resetNormalBuffer() {
+        // An old buffer that is on screen stays there after this, and the
+        // reclaim keeps what it holds, so its styles are not credited here.
+        // A full reset credits them once it has switched away from it.
+        if buffer !== normalBuffer {
+            normalBuffer.creditReclaimWait(discardingFirst: normalBuffer.lines.count)
+        }
         normalBuffer = Buffer(cols: cols, rows: rows, tabStopWidth: tabStopWidth,
                               scrollback: options.scrollback, bidiState: currentBidiState,
                               arena: cellArena)
@@ -1176,12 +1249,29 @@ open class Terminal {
         _rows = max (options.rows, MINIMUM_ROWS)
         
         if isReset {
+            let displayed = buffer
             resetNormalBuffer()
             activateNormalBuffer(clearAlt: false)
+            // The switch takes the old normal buffer off screen, so the
+            // styles it held may be free now.
+            if displayed !== altBuffer && displayed !== buffer {
+                displayed.creditReclaimWait(discardingFirst: displayed.lines.count)
+            }
             resetSemanticPromptState(clearingScreenMarks: true)
         } else {
+            let oldNormalCols = normalBuffer.cols
+            let oldAltCols = altBuffer.cols
             normalBuffer.resize(newCols: cols, newRows: rows)
             altBuffer.resize(newCols: cols, newRows: rows)
+            // `Buffer.resize` gives the columns it adds no tab stops. Lay the
+            // default stops in those columns only, so the stops the host set
+            // or cleared in the old columns stay as they are.
+            if cols > oldNormalCols {
+                normalBuffer.setupTabStops(newColumnsFrom: oldNormalCols, tabStopWidth: tabStopWidth)
+            }
+            if cols > oldAltCols {
+                altBuffer.setupTabStops(newColumnsFrom: oldAltCols, tabStopWidth: tabStopWidth)
+            }
         }
         cursorHidden = false
         
@@ -1909,7 +1999,7 @@ open class Terminal {
     private func makePackedCell(attribute: Attribute, scalar: UnicodeScalar,
                                 width: Int8) -> PackedCell
     {
-        let styleID = cellArena.intern(attribute: attribute) ?? 0
+        let styleID = internReclaiming(attribute) ?? 0
         return makePackedCell(styleID: styleID, scalar: scalar, width: width)
     }
 
@@ -1917,8 +2007,14 @@ open class Terminal {
     private func makePackedCell(attribute: Attribute, character: Character,
                                 width: Int8) -> PackedCell
     {
-        let styleID = cellArena.intern(attribute: attribute) ?? 0
+        let styleID = internReclaiming(attribute) ?? 0
         return makePackedCell(styleID: styleID, character: character, width: width)
+    }
+
+    /// The blank cell that inserted columns take, as `Buffer.getPackedNullCell()`
+    /// makes it, with its style interned through a reclaim.
+    private func makePackedNullCell() -> PackedCell {
+        makePackedCell(attribute: Attribute.empty, scalar: " ", width: 1)
     }
 
     public func makeCharData (attribute: Attribute, char: Character, size: Int8 = 1) -> CharData
@@ -3685,6 +3781,7 @@ open class Terminal {
             // Clear scrollback (everything not in viewport)
             let scrollBackSize = buffer.lines.count - rows
             if scrollBackSize > 0 {
+                buffer.creditReclaimWait(discardingFirst: scrollBackSize)
                 buffer.lines.trimStart (count: scrollBackSize)
                 buffer.linesTop = 0
                 buffer.yBase = max (buffer.yBase - scrollBackSize, 0)
@@ -4059,7 +4156,7 @@ open class Terminal {
                 line.insertPackedCells(
                     pos: buffer.x, n: n,
                     rightMargin: marginMode ? buffer.marginRight : cols - 1,
-                    fill: buffer.getPackedNullCell())
+                    fill: makePackedNullCell())
                 line.isWrapped = false
             }
             return
@@ -6881,7 +6978,7 @@ open class Terminal {
                 line.insertPackedCells(
                     pos: at, n: 1,
                     rightMargin: marginMode ? buffer.marginRight : cols - 1,
-                    fill: buffer.getPackedNullCell())
+                    fill: makePackedNullCell())
             } else {
                 line.deletePackedCells(
                     pos: at, n: 1,
@@ -7001,6 +7098,12 @@ open class Terminal {
             // row into scrollback. Keep the splice path for that case.
             // Determine whether the buffer is going to be trimmed after insertion.
             let willBufferBeTrimmed = lines.isFull
+            // The first line leaves the buffer, so the styles it held may now
+            // be free. Credit them only while the reclaim wait is on, so
+            // ordinary scrolling pays only for this check.
+            if willBufferBeTrimmed && cellArena.isWaitingToReclaim {
+                cellArena.creditReclaimWait(discarding: lines[0])
+            }
 
             // Insert the line using the fastest method
             if bottomRow == lines.count - 1 {
@@ -7053,6 +7156,11 @@ open class Terminal {
             guard bottomRow < lines.count else {
                 print ("scroll: bottomRow \(bottomRow) >= lines.count \(lines.count), state: yBase=\(buffer.yBase) scrollTop=\(scrollTop) scrollBottom=\(scrollBottom) isAlternate=\(isCurrentBufferAlternate)")
                 return
+            }
+
+            // The region's top line is cleared for reuse at its bottom.
+            if cellArena.isWaitingToReclaim && topRow >= 0 && topRow <= bottomRow {
+                cellArena.creditReclaimWait(discarding: lines[topRow])
             }
 
             if !lines.shiftUpAndRecycle(top: topRow, bottom: bottomRow,

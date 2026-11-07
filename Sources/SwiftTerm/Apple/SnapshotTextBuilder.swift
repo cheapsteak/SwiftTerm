@@ -75,6 +75,8 @@ final class SnapshotTextBuilder {
     /// through ObjC.
     private(set) var attributeCache: [AttributeCacheKey: SnapshotTextAttributes] = [:]
     private var packedAttributeCache: [PackedAttributeCacheKey: SnapshotTextAttributes] = [:]
+    /// The cell-arena epoch whose style identifiers key `packedAttributeCache`.
+    private var packedAttributeCacheEpoch: UInt64 = 0
     private(set) var attributeCacheContextID: UInt64 = .max
 
     private func resolvedFont(for character: Character, base: TTFont) -> TTFont {
@@ -316,6 +318,13 @@ final class SnapshotTextBuilder {
     {
         var segments: [ViewLineSegment] = []
         let line = snapshotRow.line
+        // A reclaim hands style identifiers to new attributes, so entries
+        // keyed by identifier hold only within one arena epoch.
+        let attributeEpoch = line.cellArena.attributeEpoch
+        if attributeEpoch != packedAttributeCacheEpoch {
+            packedAttributeCache.removeAll(keepingCapacity: true)
+            packedAttributeCacheEpoch = attributeEpoch
+        }
         let cols = context.cols
         let selectionColumns = context.selection.columns(forRow: absoluteRow)
         var col = 0

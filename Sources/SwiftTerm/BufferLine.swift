@@ -214,6 +214,13 @@ public final class BufferLine: CustomDebugStringConvertible {
         tailBlankCell = blankTailCell ?? PackedCell()
     }
 
+    /// Makes a copy of `other` that is not part of any buffer.
+    ///
+    /// The copy shares `other`'s style table, but a reclaim counts it as a
+    /// holder only once it is in a buffer. Until then, after the style table
+    /// fills, a style it uses can pass to a different attribute and its cells
+    /// can change colour. Read the cells you need, for example with
+    /// `getData()`, before the terminal is fed more output.
     public init (from other: BufferLine)
     {
         isWrappedValue = other.isWrappedValue
@@ -333,6 +340,21 @@ public final class BufferLine: CustomDebugStringConvertible {
     func pack(_ value: CharData) -> PackedCell { storage.packed(value) }
 
     var cellArena: CellArena { storage.arena }
+
+    /// Adds every style identifier this line holds to `set`, including that
+    /// of the blank cell a later clear may leave in place.
+    func insertStyleIdentifiers(into set: inout StyleIdentifierSet) {
+        storage.insertStyleIdentifiers(into: &set)
+        set.insert(tailBlankCell.styleID)
+    }
+
+    /// Adds the same identifiers as ``insertStyleIdentifiers(into:)``, and
+    /// returns how many identifiers other than the default one `set` did not
+    /// hold.
+    func insertNewStyleIdentifiers(into set: inout StyleIdentifierSet) -> Int {
+        let added = storage.insertNewStyleIdentifiers(into: &set)
+        return added + set.insertCountingNew(tailBlankCell.styleID)
+    }
 
     func adoptArena(_ arena: CellArena) {
         guard storage.arena !== arena else { return }

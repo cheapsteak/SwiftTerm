@@ -347,8 +347,14 @@ final class TerminalSnapshot {
 
         let buffer = terminal.displayBuffer
         let sourceArena = buffer.cellArena
+        // The copy is replaced on the first refresh and after the terminal
+        // reclaims style identifiers. A row whose line decodes through an
+        // older copy is copied again below if the frame still shows it, and
+        // dropped rather than pooled if not. The pool is dropped here too, so
+        // no pooled row keeps an older copy alive.
         if cellArenaSnapshot?.synchronizeSnapshotPrefix(from: sourceArena) != true {
             cellArenaSnapshot = sourceArena.snapshotCopy()
+            rowPool.removeAll()
         }
         let snapshotArena = cellArenaSnapshot!
         let newStyle = SnapshotStyle(
@@ -386,7 +392,10 @@ final class TerminalSnapshot {
 
         let visibleCount = max(0, min(buffer.rows, buffer.lines.count - firstRow))
         while rows.count > visibleCount {
-            rowPool.append(rows.removeLast())
+            let row = rows.removeLast()
+            if row.line.cellArena === snapshotArena {
+                rowPool.append(row)
+            }
         }
         while rows.count < visibleCount {
             let source = buffer.lines[firstRow + rows.count]
@@ -398,8 +407,8 @@ final class TerminalSnapshot {
             let absoluteRow = firstRow + index
             let source = buffer.lines[absoluteRow]
             let destination = rows[index]
-            let contentChanged = destination.sourceIdentity !=
-                ObjectIdentifier(source.renderIdentity) ||
+            let contentChanged = destination.line.cellArena !== snapshotArena ||
+                destination.sourceIdentity != ObjectIdentifier(source.renderIdentity) ||
                 destination.sourceGeneration != source.generation
             let bidiRevision = TerminalBidi.layoutRevision(
                 row: absoluteRow, buffer: buffer,

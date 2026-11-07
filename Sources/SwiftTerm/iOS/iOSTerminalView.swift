@@ -258,6 +258,17 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     var terminal: Terminal!
     private var progressBarView: TerminalProgressBarView?
     private var progressReportTimer: Timer?
+
+    /// Whether OSC 9;4 progress reports are drawn as a bar across the top of the view.
+    /// Defaults to true. Setting it to false hides and clears any bar currently shown,
+    /// and later reports are ignored until it is set back to true.
+    public var showsProgressBar: Bool = true {
+        didSet {
+            guard !showsProgressBar else { return }
+            progressBarView?.isHidden = true
+            clearProgressReport()
+        }
+    }
     
     /// Tracks the selection state of the terminal, and can be used to set it
     /// programmatically (see `SelectionService`).
@@ -552,6 +563,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     }
 
     private func handleProgressReport(_ report: Terminal.ProgressReport) {
+        guard showsProgressBar else { return }
         if report.state == .remove {
             clearProgressReport()
             return

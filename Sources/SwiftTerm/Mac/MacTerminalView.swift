@@ -474,6 +474,17 @@ open class TerminalView: NSView, NSUserInterfaceValidations, TerminalDelegate {
     private var markedTextOverlay: DictationOverlayTextView?
     private var progressBarView: TerminalProgressBarView?
     private var progressReportTimer: Timer?
+
+    /// Whether OSC 9;4 progress reports are drawn as a bar across the top of the view.
+    /// Defaults to true. Setting it to false hides and clears any bar currently shown,
+    /// and later reports are ignored until it is set back to true.
+    public var showsProgressBar: Bool = true {
+        didSet {
+            guard !showsProgressBar else { return }
+            progressBarView?.isHidden = true
+            clearProgressReport()
+        }
+    }
     private enum UIShutdownState {
         case active
         case stopping
@@ -1062,6 +1073,7 @@ open class TerminalView: NSView, NSUserInterfaceValidations, TerminalDelegate {
 
     @MainActor
     private func handleProgressReport(_ report: Terminal.ProgressReport) {
+        guard showsProgressBar else { return }
         if report.state == .remove {
             clearProgressReport()
             return
@@ -1499,6 +1511,15 @@ open class TerminalView: NSView, NSUserInterfaceValidations, TerminalDelegate {
     /// terminal if it has requested the data.   This poses a problem for selection, so users
     /// need a way of toggling this behavior.
     public var allowMouseReporting: Bool = true
+
+    /// When `true`, a mouse event with the Option key held is never reported
+    /// to the application and works the view's own selection instead — the
+    /// way Shift already does, and the convention every other macOS terminal
+    /// follows (Terminal.app, iTerm2), which is what programs mean when they
+    /// print "option+click to select". Off by default, so nothing changes for
+    /// a host that has not asked; a host that turns it on should expect
+    /// programs relying on Option-modified mouse reports to lose them.
+    public var optionBypassesMouseReporting: Bool = false
 
     /// Controls how link tracking resolves hovered links:
     /// `.explicit` = OSC 8 only, `.implicit` = explicit + implicit fallback, `.none` = off.
@@ -3307,7 +3328,9 @@ open class TerminalView: NSView, NSUserInterfaceValidations, TerminalDelegate {
 
     private func shiftBypassesMouseReportingLocked(for event: NSEvent) -> Bool {
         terminal.terminalLock.preconditionLocked()
-        return event.modifierFlags.contains(.shift) && !terminal.mouseShiftCapture
+        let flags = event.modifierFlags
+        if flags.contains(.shift) && !terminal.mouseShiftCapture { return true }
+        return optionBypassesMouseReporting && flags.contains(.option)
     }
 
     private func semanticPromptModifiers(for event: NSEvent) -> SemanticPromptClickModifiers {
