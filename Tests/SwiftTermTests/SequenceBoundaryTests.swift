@@ -32,10 +32,23 @@ struct SequenceBoundaryTests {
         arguments: [
             ("\u{1b}", "[1m"),
             ("\u{1b}[38;5;", "196m"),
+            // CSI with an intermediate byte: DECRQM waiting for its final.
+            ("\u{1b}[?1$", "p"),
+            // ESC with an intermediate byte: a G0 designation waiting for its
+            // final.
+            ("\u{1b}(", "B"),
             ("\u{1b}]0;half a ti", "tle\u{07}"),
             ("\u{1b}]8;;https://example.com/pa", "th\u{1b}\\"),
             ("\u{1b}Pq#0;2;0;0;0", "#0!10~\u{1b}\\"),
             ("\u{1b}_Ga=q,i=1;AAA", "A\u{1b}\\"),
+            // SOS and PM, whose content is ignored but still ends at ST.
+            ("\u{1b}Xstart of", " a string\u{1b}\\"),
+            ("\u{1b}^start of", " a message\u{1b}\\"),
+            // Between the ESC and the backslash of an ST: the string has
+            // ended, and the ESC is waiting for its final byte.
+            ("\u{1b}]0;title\u{1b}", "\\"),
+            ("\u{1b}Pq#0!10~\u{1b}", "\\"),
+            ("\u{1b}Xignored\u{1b}", "\\"),
         ])
     func unfinishedSequences(start: String, rest: String) {
         let (terminal, delegate) = Self.makeTerminal()
