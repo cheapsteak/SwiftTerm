@@ -1450,6 +1450,13 @@ extension TerminalView {
         renderOwner.dimensions()
     }
 
+    /// Whether the terminal's parser is between sequences. See
+    /// ``Terminal/isAtSequenceBoundary``. Callable from any thread, so the
+    /// thread that feeds the view can ask after a feed returns.
+    public nonisolated var isAtSequenceBoundary: Bool {
+        renderOwner.isAtSequenceBoundary()
+    }
+
     /// Returns copied terminal state for status displays and diagnostics.
     public nonisolated func terminalStateSnapshot() -> TerminalViewStateSnapshot {
         renderOwner.stateSnapshot()

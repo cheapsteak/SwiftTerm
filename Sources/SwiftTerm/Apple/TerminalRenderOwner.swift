@@ -247,6 +247,11 @@ final class TerminalRenderOwner: Sendable {
         }
     }
 
+    func isAtSequenceBoundary() -> Bool {
+        guard let terminal = currentSession()?.terminal else { return true }
+        return terminal.terminalLock.withLock { terminal.isAtSequenceBoundary }
+    }
+
     func bufferData(kind: Terminal.BufferKind,
                     encoding: String.Encoding) -> Data {
         guard let terminal = currentSession()?.terminal else { return Data() }

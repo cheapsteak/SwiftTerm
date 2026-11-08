@@ -1,3 +1,6 @@
+#if os(macOS)
+import AppKit
+#endif
 import Testing
 // A plain import, not `@testable`: the point is that an embedder can read this.
 import SwiftTerm
@@ -69,4 +72,22 @@ struct SequenceBoundaryTests {
         #expect(terminal.isAtSequenceBoundary)
         withExtendedLifetime(delegate) {}
     }
+
+    #if os(macOS)
+    /// The view answers from any thread, so the thread that feeds it can ask
+    /// once a feed has returned.
+    @MainActor
+    @Test("A view reports its terminal's boundary")
+    func viewReportsTheBoundary() {
+        let view = TerminalView(
+            frame: CGRect(origin: .zero, size: CGSize(width: 400, height: 200)),
+            font: nil,
+            options: TerminalOptions(cols: 80, rows: 24, scrollback: 100))
+        #expect(view.isAtSequenceBoundary)
+        view.feed(text: "\u{1b}]0;half a ti")
+        #expect(!view.isAtSequenceBoundary)
+        view.feed(text: "tle\u{07}")
+        #expect(view.isAtSequenceBoundary)
+    }
+    #endif
 }
