@@ -639,6 +639,22 @@ open class Terminal {
     /// To register a custom OSC handler, use ``registerOscHandler(code:handler:)``.
     private var parser: EscapeSequenceParser
 
+    /// Whether the parser sits between sequences: in its ground state, with
+    /// no partial UTF-8 character held back for the next feed.
+    ///
+    /// An embedder that feeds bytes of its own into a terminal that is also
+    /// fed a program's output (a mode query, for example) should wait for
+    /// this to be true. An `ESC` fed into an unfinished CSI, OSC, DCS or APC
+    /// ends that sequence early, and its remainder prints as text when it
+    /// arrives. A feed between the bytes of a UTF-8 character drops the
+    /// character.
+    ///
+    /// Read it where the terminal is fed: on the feeding thread, or under
+    /// `terminalLock`.
+    public var isAtSequenceBoundary: Bool {
+        parser.currentState == .ground && readingBuffer.putbackBuffer.isEmpty
+    }
+
     /// Owns copied OSC observations independently of parser storage.
     private let oscEventDispatcher = TerminalOscEventDispatcher()
 
